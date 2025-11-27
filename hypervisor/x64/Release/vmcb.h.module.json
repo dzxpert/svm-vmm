@@ -1,0 +1,22 @@
+{
+    "version": 1,
+    "revision": 0,
+    "rules": [
+        {
+            "primary-output": "x64\\Release\\vmcb.h.obj",
+            "outputs": [
+                "C:\\Users\\stark\\Рабочий стол\\hypervisor\\hypervisor\\x64\\Release\\vc143.pdb",
+                "x64\\Release\\",
+                "C:\\Users\\stark\\Рабочий стол\\hypervisor\\hypervisor\\x64\\Release\\vmcb.h.ifc"
+            ],
+            "provides": [
+                {
+                    "logical-name": "vmcb.h",
+                    "source-path": "c:\\users\\stark\\рабочий стол\\hypervisor\\hypervisor\\vmcb.h",
+                    "lookup-method": "absolute"
+                }
+            ],
+            "requires": []
+        }
+    ]
+}

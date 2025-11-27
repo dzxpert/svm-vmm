@@ -1,0 +1,5 @@
+C:\Users\stark\Рабочий стол\hypervisor\hypervisor\driver.c;C:\Users\stark\Рабочий стол\hypervisor\hypervisor\x64\Release\driver.obj
+C:\Users\stark\Рабочий стол\hypervisor\hypervisor\hypervisor.c;C:\Users\stark\Рабочий стол\hypervisor\hypervisor\x64\Release\hypervisor.obj
+C:\Users\stark\Рабочий стол\hypervisor\hypervisor\npt.c;C:\Users\stark\Рабочий стол\hypervisor\hypervisor\x64\Release\npt.obj
+C:\Users\stark\Рабочий стол\hypervisor\hypervisor\svm.c;C:\Users\stark\Рабочий стол\hypervisor\hypervisor\x64\Release\svm.obj
+C:\Users\stark\Рабочий стол\hypervisor\hypervisor\vmcb.h;C:\Users\stark\Рабочий стол\hypervisor\hypervisor\x64\Release\vmcb.h.obj
