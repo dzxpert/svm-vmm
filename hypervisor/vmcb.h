@@ -85,6 +85,9 @@ typedef struct _VMCB_STATE_SAVE_AREA
     UINT64 Rsp;
 
     UINT64 Rax;
+    UINT64 Rbx;
+    UINT64 Rcx;
+    UINT64 Rdx;
     UINT64 Star;
     UINT64 Lstar;
     UINT64 Cstar;

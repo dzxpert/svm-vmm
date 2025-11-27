@@ -5,10 +5,11 @@
 #include "guest_mem.h"
 #include "npt.h"
 #include "stealth.h"
+#include "msr.h"
 
 //
 // ================================
-//     ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ
+//      
 // ================================
 //
 
@@ -16,7 +17,7 @@ static UINT64 g_OriginalLstar = 0;         // Syscall entry
 static UINT64 g_OriginalStar = 0;
 static UINT64 g_OriginalSfMask = 0;
 
-static UINT64 g_HvSyscallHandler = 0;      // Наш syscall hook (на asm)
+static UINT64 g_HvSyscallHandler = 0;      //  syscall hook ( asm)
 static BOOLEAN g_SyscallHookEnabled = FALSE;
 
 static BOOLEAN g_Cr3EncryptionEnabled = FALSE;
@@ -32,7 +33,7 @@ VOID HookCpuidEmulate(UINT32 leaf, UINT32 subleaf,
     UINT32* eax, UINT32* ebx, UINT32* ecx, UINT32* edx)
 {
     //
-    // Пример: кастомный vendor-string
+    // :  vendor-string
     //
     if (leaf == 0)
     {
@@ -42,7 +43,7 @@ VOID HookCpuidEmulate(UINT32 leaf, UINT32 subleaf,
     }
 
     //
-    // Убираем признаки виртуализации
+    //   
     //
     *ecx &= ~(1 << 31);  // hypervisor-present
 }
@@ -82,7 +83,7 @@ VOID HookInstallSyscall(VCPU* V)
     g_OriginalSfMask = __readmsr(MSR_SFMASK);
 
     //
-    // Перезаписать syscall entry на наш обработчик (ASM)
+    //  syscall entry    (ASM)
     //
     if (g_HvSyscallHandler != 0)
     {
@@ -158,7 +159,7 @@ UINT64 HookDecryptCr3(UINT64 cr3_enc)
 BOOLEAN HookNptHandleFault(VCPU* V, UINT64 faultingGpa)
 {
     //
-    // Пример: ловим страницу guest code и подменяем на свою
+    // :   guest code    
     //
     UINT64 targetPage = 0x1000;      // GPA guest shellcode
     UINT64 hookPage = 0x90000000;  // HPA with our code
@@ -181,7 +182,7 @@ BOOLEAN HookNptHandleFault(VCPU* V, UINT64 faultingGpa)
 //   RAX = hypercall code
 //   RBX, RCX, RDX = args
 //
-// Возврат RAX
+//  RAX
 //
 
 UINT64 HookVmmcallDispatch(VCPU* V, UINT64 code, UINT64 a1, UINT64 a2, UINT64 a3)
@@ -190,7 +191,7 @@ UINT64 HookVmmcallDispatch(VCPU* V, UINT64 code, UINT64 a1, UINT64 a2, UINT64 a3
     {
     case 0x100:   // read guest virtual mem
     {
-        BYTE buf[8];
+        UINT8 buf[8];
         if (GuestReadGva(V, a1, buf, sizeof(buf)))
             return *(UINT64*)buf;
         return 0;
@@ -232,6 +233,6 @@ UINT64 HookVmmcallDispatch(VCPU* V, UINT64 code, UINT64 a1, UINT64 a2, UINT64 a3
 
 VOID HookIoIntercept(VCPU* V)
 {
-    // Ты можешь логировать или эмулировать IO здесь
+    //      IO 
 }
 

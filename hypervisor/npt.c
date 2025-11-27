@@ -1,7 +1,9 @@
 ﻿#include "npt.h"
 #include <ntifs.h>
 
+#ifndef PAGE_ALIGN
 #define PAGE_ALIGN(x) ((x) & ~0xFFFULL)
+#endif
 
 static NPT_ENTRY * NptAllocTable(PHYSICAL_ADDRESS * outPa)
 {
