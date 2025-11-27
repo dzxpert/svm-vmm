@@ -1,48 +1,35 @@
 #include <ntifs.h>
 #include "svm.h"
+#include "vcpu.h"
 
-PDRIVER_OBJECT g_DriverObject;
-VCPU* g_Vcpu;
+VCPU* g_Vcpu0 = NULL;
 
-VOID DriverUnload(PDRIVER_OBJECT DriverObject)
+VOID DriverUnload(PDRIVER_OBJECT D)
 {
-    UNREFERENCED_PARAMETER(DriverObject);
-
-    if (g_Vcpu)
+    if (g_Vcpu0)
     {
-        SvmShutdown(g_Vcpu);
-        g_Vcpu = NULL;
+        SvmShutdown(g_Vcpu0);
+        g_Vcpu0 = NULL;
     }
 
-    DbgPrint("vmm: unloaded\n");
+    DbgPrint("SVM-HV: unloaded\n");
 }
 
-NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
+NTSTATUS DriverEntry(PDRIVER_OBJECT D, PUNICODE_STRING R)
 {
-    UNREFERENCED_PARAMETER(RegistryPath);
+    UNREFERENCED_PARAMETER(R);
 
-    g_DriverObject = DriverObject;
-    DriverObject->DriverUnload = DriverUnload;
+    D->DriverUnload = DriverUnload;
 
-    DbgPrint("vmm: loading\n");
-
-    NTSTATUS status = SvmInit(&g_Vcpu);
-    if (!NT_SUCCESS(status))
+    NTSTATUS st = SvmInit(&g_Vcpu0);
+    if (!NT_SUCCESS(st))
     {
-        DbgPrint("vmm: SvmInit failed 0x%08X\n", status);
-        return status;
+        DbgPrint("SVM-HV: SvmInit failed: 0x%X\n", st);
+        return st;
     }
 
-    status = SvmLaunch(g_Vcpu);
-    if (!NT_SUCCESS(status))
-    {
-        DbgPrint("vmm: SvmLaunch failed 0x%08X\n", status);
-        SvmShutdown(g_Vcpu);
-        g_Vcpu = NULL;
-        return status;
-    }
-
-    DbgPrint("vmm: vmrun finished\n");
+    st = SvmLaunch(g_Vcpu0);
+    DbgPrint("SVM-HV: vmrun returned: 0x%X\n", st);
 
     return STATUS_SUCCESS;
 }

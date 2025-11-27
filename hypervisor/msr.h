@@ -13,7 +13,7 @@ static __forceinline UINT64 MsrRead(ULONG msr)
 {
     return __readmsr(msr);
 }
-
+    
 static __forceinline VOID MsrWrite(ULONG msr, UINT64 value)
 {
     __writemsr(msr, value);

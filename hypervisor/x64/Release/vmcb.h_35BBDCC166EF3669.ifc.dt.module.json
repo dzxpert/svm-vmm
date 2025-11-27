@@ -3,15 +3,15 @@
     "revision": 0,
     "rules": [
         {
-            "primary-output": "x64\\Release\\vmcb.h.obj",
+            "primary-output": "x64\\Release\\vmcb.obj",
             "outputs": [
-                "D:\\WindowsDrivers\\svm-vmm\\hypervisor\\x64\\Release\\vc143.pdb",
-                "x64\\Release\\",
-                "D:\\WindowsDrivers\\svm-vmm\\hypervisor\\x64\\Release\\vmcb.h.ifc"
+                "x64\\Release\\vmcb.h_35BBDCC166EF3669.ifc.dt.module.json",
+                "x64\\Release\\vmcb.h_35BBDCC166EF3669.ifc.dt.d.json",
+                "x64\\Release\\vmcb.h.ifc"
             ],
             "provides": [
                 {
-                    "logical-name": "vmcb.h",
+                    "logical-name": "D:\\WindowsDrivers\\svm-vmm\\hypervisor\\vmcb.h",
                     "source-path": "d:\\windowsdrivers\\svm-vmm\\hypervisor\\vmcb.h",
                     "lookup-method": "absolute"
                 }

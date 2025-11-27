@@ -28,6 +28,21 @@
     <ClCompile Include="vmcb.h">
       <Filter>Source Files\Include</Filter>
     </ClCompile>
+    <ClCompile Include="guest_mem.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="hooks.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="stealth.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="smp.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="shadow_idt.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <None Include="vmrun.asm">
@@ -45,6 +60,21 @@
       <Filter>Source Files\Include</Filter>
     </ClInclude>
     <ClInclude Include="vcpu.h">
+      <Filter>Source Files\Include</Filter>
+    </ClInclude>
+    <ClInclude Include="guest_mem.h">
+      <Filter>Source Files\Include</Filter>
+    </ClInclude>
+    <ClInclude Include="hooks.h">
+      <Filter>Source Files\Include</Filter>
+    </ClInclude>
+    <ClInclude Include="stealth.h">
+      <Filter>Source Files\Include</Filter>
+    </ClInclude>
+    <ClInclude Include="smp.h">
+      <Filter>Source Files\Include</Filter>
+    </ClInclude>
+    <ClInclude Include="shadow_idt.h">
       <Filter>Source Files\Include</Filter>
     </ClInclude>
   </ItemGroup>

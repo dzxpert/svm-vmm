@@ -1,5 +1,4 @@
-OPTION DOTNAME
-
+﻿OPTION DOTNAME
 .text
 
 PUBLIC VmrunAsm
@@ -12,9 +11,11 @@ VmrunAsm PROC
 VmrunAsm ENDP
 
 GuestEntry PROC
+GuestLoop:
+    mov rax, 1337h
     vmmcall
     hlt
-    jmp GuestEntry
+    jmp GuestLoop
 GuestEntry ENDP
 
 END

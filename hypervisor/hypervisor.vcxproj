@@ -101,8 +101,13 @@
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="driver.c" />
+    <ClCompile Include="guest_mem.c" />
+    <ClCompile Include="hooks.c" />
     <ClCompile Include="hypervisor.c" />
     <ClCompile Include="npt.c" />
+    <ClCompile Include="shadow_idt.c" />
+    <ClCompile Include="smp.c" />
+    <ClCompile Include="stealth.c" />
     <ClCompile Include="svm.c" />
     <ClCompile Include="vmcb.h" />
   </ItemGroup>
@@ -110,8 +115,13 @@
     <None Include="vmrun.asm" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="guest_mem.h" />
+    <ClInclude Include="hooks.h" />
     <ClInclude Include="msr.h" />
     <ClInclude Include="npt.h" />
+    <ClInclude Include="shadow_idt.h" />
+    <ClInclude Include="smp.h" />
+    <ClInclude Include="stealth.h" />
     <ClInclude Include="svm.h" />
     <ClInclude Include="vcpu.h" />
   </ItemGroup>
