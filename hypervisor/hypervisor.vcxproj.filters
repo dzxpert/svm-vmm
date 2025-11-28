@@ -25,9 +25,6 @@
     <ClCompile Include="hypervisor.c">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="vmcb.h">
-      <Filter>Source Files\Include</Filter>
-    </ClCompile>
     <ClCompile Include="guest_mem.c">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -46,11 +43,6 @@
     <ClCompile Include="layers.c">
       <Filter>Source Files</Filter>
     </ClCompile>
-  </ItemGroup>
-  <ItemGroup>
-    <None Include="vmrun.asm">
-      <Filter>Source Files\ASM</Filter>
-    </None>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="svm.h">
@@ -81,6 +73,9 @@
       <Filter>Source Files\Include</Filter>
     </ClInclude>
     <ClInclude Include="layers.h">
+      <Filter>Source Files\Include</Filter>
+    </ClInclude>
+    <ClInclude Include="vmcb.h">
       <Filter>Source Files\Include</Filter>
     </ClInclude>
   </ItemGroup>

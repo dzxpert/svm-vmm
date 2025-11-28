@@ -14,11 +14,11 @@ static VOID HvPrimeCloaking(VCPU* V)
 {
     VMCB_CONTROL_AREA* c = VmcbControl(V->Vmcb);
 
-    // Cloak TSC with a deterministic offset to blur timing fingerprints
+   
     V->CloakedTscOffset = (__rdtsc() ^ 0xC0FFEEULL);
     c->TscOffset = V->CloakedTscOffset;
 
-    // Enable CPUID/MSR masking and VMCS cleaning
+   
     StealthEnable();
     StealthCleanVmcb(V);
 }
@@ -28,7 +28,7 @@ static VOID HvPrimeHardwareEntry(VCPU* V)
     V->Ipc.MailboxGpa = APIC_BASE_GPA;
     V->Ipc.Active = TRUE;
 
-    // Arm APIC/ACPI/SMM/MMIO traps so the first touch enters the hypervisor
+    
     NptSetupHardwareTriggers(&V->Npt, APIC_BASE_GPA, ACPI_PM_GPA, SMM_TRAP_GPA, MMIO_DOORBELL);
 }
 
@@ -40,7 +40,7 @@ VOID HvActivateLayeredPipeline(VCPU* V)
     HvPrimeCloaking(V);
     HvPrimeHardwareEntry(V);
 
-    // Tighten exit budget to feed anti-exit logic
+   
     V->Exec.ExitBudget = 0x100;
 }
 
@@ -69,13 +69,13 @@ VOID HvRefreshExecLayer(VCPU* V, UINT64 exitCode)
     V->Exec.ExitCount++;
     V->Exec.LastExitCode = exitCode;
 
-    // Anti-exit trick: dynamically re-arm hardware triggers and clean VMCB
+
     if ((V->Exec.ExitCount % V->Exec.ExitBudget) == 0)
     {
         NptRearmHardwareTriggers(&V->Npt);
         StealthCleanVmcb(V);
     }
 
-    // Keep TSC cloaked every exit for stable timing hiding
+
     c->TscOffset = V->CloakedTscOffset;
 }

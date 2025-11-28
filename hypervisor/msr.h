@@ -9,7 +9,7 @@
 
 #define MSR_VM_HSAVE_PA          0xC0010117
 
-// System-call related MSRs
+
 #define MSR_STAR                  0xC0000081
 #define MSR_LSTAR                 0xC0000082
 #define MSR_SFMASK                0xC0000084

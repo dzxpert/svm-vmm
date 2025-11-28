@@ -19,9 +19,9 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT D, PUNICODE_STRING R)
 {
     UNREFERENCED_PARAMETER(R);
 
-    D->DriverUnload = DriverUnload;
+	D->DriverUnload = DriverUnload; // <--- maybe cause issue (bsod) if DriverUnload is not defined properly
 
-    NTSTATUS st = SvmInit(&g_Vcpu0);
+	NTSTATUS st = SvmInit(&g_Vcpu0); // <--- vgk gamerdog bypass $
     if (!NT_SUCCESS(st))
     {
         DbgPrint("SVM-HV: SvmInit failed: 0x%X\n", st);

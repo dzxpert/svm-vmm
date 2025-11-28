@@ -1,3 +1,6 @@
+#define INTERCEPT_CPUID   (1ULL << 0)
+#define INTERCEPT_HLT     (1ULL << 7)
+#define INTERCEPT_MSR     (1ULL << 0) 
 #include <ntifs.h>
 #include <intrin.h>
 #include "svm.h"
@@ -5,6 +8,10 @@
 #include "vmcb.h"
 #include "npt.h"
 #include "layers.h"
+
+#ifndef PAGE_SIZE
+#define PAGE_SIZE 0x1000
+#endif
 
 extern VOID VmrunAsm(UINT64 VmcbPa);
 extern VOID GuestEntry();
@@ -64,7 +71,7 @@ static NTSTATUS AllocGuestStack(VCPU* V)
 }
 
 static VOID SetupGuest(VCPU* V)
-{
+{   
     VMCB_STATE_SAVE_AREA* st = VmcbState(V->Vmcb);
 
     st->Rip = (UINT64)GuestEntry;
@@ -94,13 +101,13 @@ static VOID SetupControls(VCPU* V)
     c->InterceptDrWrite = 0xFFFFFFFF;
 
     c->InterceptInstruction1 =
-        (1 << SVM_EXIT_CPUID) |
-        (1 << SVM_EXIT_HLT);
+        INTERCEPT_CPUID |
+        INTERCEPT_HLT;
 
     c->InterceptInstruction2 =
-        (1ULL << SVM_EXIT_MSR);
+        INTERCEPT_MSR;
 
-    c->NptControl = 1;  // Enable NPT
+    c->NptControl = 1;  
 
     c->IopmBasePa = 0;
     c->MsrpmBasePa = 0;

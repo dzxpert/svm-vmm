@@ -9,9 +9,7 @@
 #include "shadow_idt.h"
 #include "layers.h"
 
-//
-// Основной VMEXIT обработчик
-//
+
 
 static VOID HvAdvanceRIP(VCPU* V)
 {
@@ -21,12 +19,10 @@ static VOID HvAdvanceRIP(VCPU* V)
     if (c->Nrip)
         s->Rip = c->Nrip;
     else
-        s->Rip += 2; // fallback
+        s->Rip += 2; 
 }
 
-//
-// CPUID hook
-//
+
 static VOID HvHandleCpuid(VCPU* V)
 {
     VMCB_STATE_SAVE_AREA* s = VmcbState(V->Vmcb);
@@ -37,18 +33,14 @@ static VOID HvHandleCpuid(VCPU* V)
     UINT32 eax, ebx, ecx, edx;
     __cpuidex((int*)&eax, (int)leaf, (int)sub);
 
-    //
-    // СТЕЛС: убираем Hypervisor present / SVM bit
-    //
+   
     if (leaf == 1)
         ecx &= ~(1 << 31);
 
     if (leaf == 0x80000001)
         edx &= ~(1 << 2);
 
-    //
-    // Выполняем твики CPUID
-    //
+    
     StealthMaskCpuid((UINT32)leaf, &ecx, &edx);
     HookCpuidEmulate(leaf, sub, &eax, &ebx, &ecx, &edx);
 
@@ -60,9 +52,7 @@ static VOID HvHandleCpuid(VCPU* V)
     HvAdvanceRIP(V);
 }
 
-//
-// MSR Read/Write
-//
+
 static VOID HvHandleMsr(VCPU* V)
 {
     VMCB_STATE_SAVE_AREA* s = VmcbState(V->Vmcb);
@@ -84,9 +74,7 @@ static VOID HvHandleMsr(VCPU* V)
     HvAdvanceRIP(V);
 }
 
-//
-// VMMCALL hypercalls — ring-3 / kernel-mode
-//
+
 static VOID HvHandleVmmcall(VCPU* V)
 {
     VMCB_STATE_SAVE_AREA* s = VmcbState(V->Vmcb);
@@ -103,16 +91,14 @@ static VOID HvHandleVmmcall(VCPU* V)
     HvAdvanceRIP(V);
 }
 
-//
-// Nested Page Fault → NPT Hook / memory monitor
-//
+
 static VOID HvHandleNpf(VCPU* V)
 {
     VMCB_CONTROL_AREA* c = VmcbControl(V->Vmcb);
 
     UINT64 fault_gpa = c->ExitInfo2;
 
-    // Hardware entry/IPC layer first
+   
     if (HvHandleLayeredNpf(V, fault_gpa))
     {
         HvAdvanceRIP(V);
@@ -124,27 +110,21 @@ static VOID HvHandleNpf(VCPU* V)
     HvAdvanceRIP(V);
 }
 
-//
-// HLT
-//
+
 static VOID HvHandleHlt(VCPU* V)
 {
-    // Просто двигаем RIP
+  
     HvAdvanceRIP(V);
 }
 
-//
-// IOIO
-//
+
 static VOID HvHandleIo(VCPU* V)
 {
     HookIoIntercept(V);
     HvAdvanceRIP(V);
 }
 
-//
-// Основной обработчик VMEXIT
-//
+
 NTSTATUS HypervisorHandleExit(VCPU* V)
 {
     if (!V || !V->Vmcb) return STATUS_INVALID_PARAMETER;

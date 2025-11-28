@@ -7,17 +7,13 @@
 #include "stealth.h"
 #include "msr.h"
 
-//
-// ================================
-//      
-// ================================
-//
 
-static UINT64 g_OriginalLstar = 0;         // Syscall entry
+
+static UINT64 g_OriginalLstar = 0;        
 static UINT64 g_OriginalStar = 0;
 static UINT64 g_OriginalSfMask = 0;
 
-static UINT64 g_HvSyscallHandler = 0;      //  syscall hook ( asm)
+static UINT64 g_HvSyscallHandler = 0;     
 static BOOLEAN g_SyscallHookEnabled = FALSE;
 
 static BOOLEAN g_Cr3EncryptionEnabled = FALSE;
@@ -28,18 +24,14 @@ static BOOLEAN HookIsCr3PagePresent(VCPU* V, UINT64 cr3)
     UINT64 pml4 = cr3 & ~0xFFFULL;
     UINT64 entry = 0;
 
-    // Проверяем что первая запись PML4 доступна — простая валидация физ. адреса
-    if (!GuestReadGpa(V, pml4, &entry, sizeof(entry)))
+   
+	if (!GuestReadGpa(V, pml4, &entry, sizeof(entry))) // <-- ReadGuestPhysical(IVAN_KUST TECHNOLOGIES (INSOMIA.CLUB PRESENTS$))
         return FALSE;
 
     return (entry & 1ULL) != 0;
 }
 
-//
-// ================================
-//     CPUID EMULATION HOOK
-// ================================
-//
+
 
 VOID HookCpuidEmulate(UINT32 leaf, UINT32 subleaf,
     UINT32* eax, UINT32* ebx, UINT32* ecx, UINT32* edx)
@@ -54,17 +46,11 @@ VOID HookCpuidEmulate(UINT32 leaf, UINT32 subleaf,
         *edx = 'S', 'T', 'E', 'L';  // 'STEL'
     }
 
-    //
-    //   
-    //
+
     *ecx &= ~(1 << 31);  // hypervisor-present
 }
 
-//
-// ================================
-//       MSR READ/WRITE HOOK
-// ================================
-//
+
 
 UINT64 HookHandleMsrRead(VCPU* V, UINT64 msr)
 {
@@ -140,11 +126,7 @@ VOID HookHandleMsrWrite(VCPU* V, UINT64 msr, UINT64 value)
     }
 }
 
-//
-// ================================
-//        CR3 ENCRYPT/DECRYPT
-// ================================
-//
+
 
 UINT64 HookEncryptCr3(UINT64 cr3)
 {
@@ -161,12 +143,11 @@ UINT64 HookDecryptCr3(VCPU* V, UINT64 cr3_enc)
 
     UINT64 candidate = cr3_enc ^ g_Cr3XorKey;
 
-    // Дополнительно валидируем, что расшифрованный CR3 указывает
-    // на действительно присутствующую PML4 таблицу в гостевой физ. памяти
+    
     if (V && HookIsCr3PagePresent(V, candidate))
         return candidate;
 
-    // если не удалось проверить — возвращаем расшифрованное значение как есть
+   
     return candidate;
 }
 
@@ -180,11 +161,7 @@ VOID HookDisableCr3Encryption()
     g_Cr3EncryptionEnabled = FALSE;
 }
 
-//
-// ================================
-//     NPT / GPA HOOK INTERFACE
-// ================================
-//
+
 
 BOOLEAN HookNptHandleFault(VCPU* V, UINT64 faultingGpa)
 {
@@ -199,17 +176,7 @@ BOOLEAN HookNptHandleFault(VCPU* V, UINT64 faultingGpa)
     return FALSE;
 }
 
-//
-// ================================
-//       RING-3 VMMCALL API
-// ================================
-//
-// VMMCALL convention:
-//   RAX = hypercall code
-//   RBX, RCX, RDX = args
-//
-//  RAX
-//
+
 
 UINT64 HookVmmcallDispatch(VCPU* V, UINT64 code, UINT64 a1, UINT64 a2, UINT64 a3)
 {
@@ -272,11 +239,7 @@ UINT64 HookVmmcallDispatch(VCPU* V, UINT64 code, UINT64 a1, UINT64 a2, UINT64 a3
     }
 }
 
-//
-// ================================
-//     IO PORT INTERCEPT
-// ================================
-//
+
 
 VOID HookIoIntercept(VCPU* V)
 {
