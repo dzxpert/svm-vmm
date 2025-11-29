@@ -1,0 +1,78 @@
+﻿C:\Users\stark\OneDrive\Рабочий стол\svm-vmm\SeCodeIntegrityQueryInformation.vcxproj(69,5): warning MSB4011: невозможно повторно импортировать "C:\Program Files\Microsoft Visual Studio\2022\Community\MSBuild\Microsoft\VC\v170\BuildCustomizations\masm.props". Он уже был импортирован в "C:\Program Files (x86)\Windows Kits\10\build\10.0.26100.0\WindowsDriver.Shared.props (366,3)". Скорее всего это связано с ошибкой при написании кода сборки. Повторный импорт будет пропущен. 
+C:\Users\stark\OneDrive\Рабочий стол\svm-vmm\SeCodeIntegrityQueryInformation.vcxproj(159,5): warning MSB4011: невозможно повторно импортировать "C:\Program Files\Microsoft Visual Studio\2022\Community\MSBuild\Microsoft\VC\v170\BuildCustomizations\masm.targets". Он уже был импортирован в "C:\Program Files (x86)\Windows Kits\10\build\10.0.26100.0\WindowsDriver.common.targets (2087,3)". Скорее всего это связано с ошибкой при написании кода сборки. Повторный импорт будет пропущен. 
+  Building 'SeCodeIntegrityQueryInformation' with toolset 'WindowsKernelModeDriver10.0' and the 'Universal' target platform.
+  Assembling shadow_idt.asm...
+  Assembling vmrun.asm...
+  driver.c
+  guest_mem.c
+C:\Users\stark\OneDrive\Рабочий стол\svm-vmm\npt.h(26,6): warning C4201: нестандартное расширение: структура (объединение) без имени
+  (компиляция исходного файла "driver.c")
+  
+C:\Users\stark\OneDrive\Рабочий стол\svm-vmm\driver.c(7,34): warning C4100: "D": неиспользованный параметр
+C:\Users\stark\OneDrive\Рабочий стол\svm-vmm\npt.h(26,6): warning C4201: нестандартное расширение: структура (объединение) без имени
+  (компиляция исходного файла "guest_mem.c")
+  
+  hooks.c
+C:\Users\stark\OneDrive\Рабочий стол\svm-vmm\npt.h(26,6): warning C4201: нестандартное расширение: структура (объединение) без имени
+  (компиляция исходного файла "hooks.c")
+  
+C:\Users\stark\OneDrive\Рабочий стол\svm-vmm\hooks.c(40,13): warning C4100: "eax": неиспользованный параметр
+C:\Users\stark\OneDrive\Рабочий стол\svm-vmm\hooks.c(39,43): warning C4100: "subleaf": неиспользованный параметр
+C:\Users\stark\OneDrive\Рабочий стол\svm-vmm\hooks.c(58,32): warning C4100: "V": неиспользованный параметр
+C:\Users\stark\OneDrive\Рабочий стол\svm-vmm\hooks.c(78,31): warning C4100: "V": неиспользованный параметр
+C:\Users\stark\OneDrive\Рабочий стол\svm-vmm\hooks.c(107,31): warning C4100: "V": неиспользованный параметр
+C:\Users\stark\OneDrive\Рабочий стол\svm-vmm\hooks.c(306,28): warning C4100: "V": неиспользованный параметр
+  hypervisor.c
+C:\Users\stark\OneDrive\Рабочий стол\svm-vmm\npt.h(26,6): warning C4201: нестандартное расширение: структура (объединение) без имени
+  (компиляция исходного файла "hypervisor.c")
+  
+C:\Users\stark\OneDrive\Рабочий стол\svm-vmm\hypervisor.c(45,22): warning C4242: функция: преобразование "UINT64" в "UINT32", возможна потеря данных
+C:\Users\stark\OneDrive\Рабочий стол\svm-vmm\hypervisor.c(45,28): warning C4242: функция: преобразование "UINT64" в "UINT32", возможна потеря данных
+  layers.c
+C:\Users\stark\OneDrive\Рабочий стол\svm-vmm\npt.h(26,6): warning C4201: нестандартное расширение: структура (объединение) без имени
+  (компиляция исходного файла "layers.c")
+  
+  npt.c
+C:\Users\stark\OneDrive\Рабочий стол\svm-vmm\npt.h(26,6): warning C4201: нестандартное расширение: структура (объединение) без имени
+  (компиляция исходного файла "npt.c")
+  
+C:\Users\stark\OneDrive\Рабочий стол\svm-vmm\npt.c(39,32): warning C4242: инициализация: преобразование "UINT64" в "ULONG", возможна потеря данных
+C:\Users\stark\OneDrive\Рабочий стол\svm-vmm\npt.c(53,32): warning C4242: инициализация: преобразование "UINT64" в "ULONG", возможна потеря данных
+C:\Users\stark\OneDrive\Рабочий стол\svm-vmm\npt.c(67,28): warning C4242: инициализация: преобразование "UINT64" в "ULONG", возможна потеря данных
+C:\Users\stark\OneDrive\Рабочий стол\svm-vmm\npt.c(26,12): warning C4189: gpaPage: локальная переменная инициализирована, но не использована
+C:\Users\stark\OneDrive\Рабочий стол\svm-vmm\npt.c(89,60): warning C4100: "gpa": неиспользованный параметр
+C:\Users\stark\OneDrive\Рабочий стол\svm-vmm\npt.c(89,46): warning C4100: "State": неиспользованный параметр
+C:\Users\stark\OneDrive\Рабочий стол\svm-vmm\npt.c(240,13): warning C4100: "originalFrame": неиспользованный параметр
+C:\Users\stark\OneDrive\Рабочий стол\svm-vmm\npt.c(403,32): warning C4996: 'ExAllocatePoolWithTag': ExAllocatePoolWithTag is deprecated, use ExAllocatePool2.
+  shadow_idt.c
+C:\Users\stark\OneDrive\Рабочий стол\svm-vmm\npt.h(26,6): warning C4201: нестандартное расширение: структура (объединение) без имени
+  (компиляция исходного файла "shadow_idt.c")
+  
+C:\Users\stark\OneDrive\Рабочий стол\svm-vmm\shadow_idt.c(101,17): warning C4210: нестандартное расширение: функция видима в пределах файла
+  smp.c
+  stealth.c
+C:\Users\stark\OneDrive\Рабочий стол\svm-vmm\stealth.h(17,41): warning C4115: _VCPU: определение именованного типа в круглых скобках
+  (компиляция исходного файла "stealth.c")
+  
+C:\Users\stark\OneDrive\Рабочий стол\svm-vmm\npt.h(26,6): warning C4201: нестандартное расширение: структура (объединение) без имени
+  (компиляция исходного файла "stealth.c")
+  
+  svm.c
+C:\Users\stark\OneDrive\Рабочий стол\svm-vmm\npt.h(26,6): warning C4201: нестандартное расширение: структура (объединение) без имени
+  (компиляция исходного файла "svm.c")
+  
+C:\Users\stark\OneDrive\Рабочий стол\svm-vmm\svm.c(43,19): warning C4996: 'ExAllocatePoolWithTag': ExAllocatePoolWithTag is deprecated, use ExAllocatePool2.
+C:\Users\stark\OneDrive\Рабочий стол\svm-vmm\svm.c(55,15): warning C4996: 'ExAllocatePoolWithTag': ExAllocatePoolWithTag is deprecated, use ExAllocatePool2.
+C:\Users\stark\OneDrive\Рабочий стол\svm-vmm\svm.c(66,21): warning C4996: 'ExAllocatePoolWithTag': ExAllocatePoolWithTag is deprecated, use ExAllocatePool2.
+  Создание кода...
+x64\Debug\shadow_idt.obj : warning LNK4042: объект указан более одного раза; лишние не учитываются
+shadow_idt.obj : error LNK2019: ссылка на неразрешенный внешний символ ShadowIdtAsmHandler в функции ShadowIdtInitialize.
+hooks.obj : error LNK2019: ссылка на неразрешенный внешний символ TranslatorTranslate в функции HookVmmcallDispatch.
+hooks.obj : error LNK2019: ссылка на неразрешенный внешний символ TranslatorGpaToHpa в функции HookVmmcallDispatch.
+hooks.obj : error LNK2019: ссылка на неразрешенный внешний символ ProcessQueryByPid в функции HookVmmcallDispatch.
+hooks.obj : error LNK2019: ссылка на неразрешенный внешний символ ProcessQueryCurrent в функции HookVmmcallDispatch.
+hooks.obj : error LNK2019: ссылка на неразрешенный внешний символ CommSend в функции HookVmmcallDispatch.
+hooks.obj : error LNK2019: ссылка на неразрешенный внешний символ CommReceive в функции HookVmmcallDispatch.
+layers.obj : error LNK2019: ссылка на неразрешенный внешний символ CommInit в функции HvPrimeHardwareEntry.
+layers.obj : error LNK2019: ссылка на неразрешенный внешний символ CommHandleDoorbell в функции HvHandleLayeredNpf.
+C:\Users\stark\OneDrive\Рабочий стол\svm-vmm\x64\Debug\SeCodeIntegrityQueryInformation.sys : fatal error LNK1120: неразрешенных внешних элементов: 9

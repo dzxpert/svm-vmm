@@ -1,0 +1,54 @@
+{
+  "Version": 1,
+  "WorkspaceRootPath": "C:\\Users\\stark\\OneDrive\\\u0420\u0430\u0431\u043E\u0447\u0438\u0439 \u0441\u0442\u043E\u043B\\svm-vmm\\",
+  "Documents": [
+    {
+      "AbsoluteMoniker": "D:0:0:{9672A593-2627-B990-DF1E-6F6FC5A359F7}|SeCodeIntegrityQueryInformation.vcxproj|C:\\Users\\stark\\OneDrive\\\u0420\u0430\u0431\u043E\u0447\u0438\u0439 \u0441\u0442\u043E\u043B\\svm-vmm\\shadow_idt.c||{D0E1A5C6-B359-4E41-9B60-3365922C2A22}",
+      "RelativeMoniker": "D:0:0:{9672A593-2627-B990-DF1E-6F6FC5A359F7}|SeCodeIntegrityQueryInformation.vcxproj|solutionrelative:shadow_idt.c||{D0E1A5C6-B359-4E41-9B60-3365922C2A22}"
+    },
+    {
+      "AbsoluteMoniker": "D:0:0:{9672A593-2627-B990-DF1E-6F6FC5A359F7}|SeCodeIntegrityQueryInformation.vcxproj|C:\\Users\\stark\\OneDrive\\\u0420\u0430\u0431\u043E\u0447\u0438\u0439 \u0441\u0442\u043E\u043B\\svm-vmm\\smp.c||{D0E1A5C6-B359-4E41-9B60-3365922C2A22}",
+      "RelativeMoniker": "D:0:0:{9672A593-2627-B990-DF1E-6F6FC5A359F7}|SeCodeIntegrityQueryInformation.vcxproj|solutionrelative:smp.c||{D0E1A5C6-B359-4E41-9B60-3365922C2A22}"
+    }
+  ],
+  "DocumentGroupContainers": [
+    {
+      "Orientation": 0,
+      "VerticalTabListWidth": 256,
+      "DocumentGroups": [
+        {
+          "DockedWidth": 200,
+          "SelectedChildIndex": 0,
+          "Children": [
+            {
+              "$type": "Document",
+              "DocumentIndex": 0,
+              "Title": "shadow_idt.c",
+              "DocumentMoniker": "C:\\Users\\stark\\OneDrive\\\u0420\u0430\u0431\u043E\u0447\u0438\u0439 \u0441\u0442\u043E\u043B\\svm-vmm\\shadow_idt.c",
+              "RelativeDocumentMoniker": "shadow_idt.c",
+              "ToolTip": "C:\\Users\\stark\\OneDrive\\\u0420\u0430\u0431\u043E\u0447\u0438\u0439 \u0441\u0442\u043E\u043B\\svm-vmm\\shadow_idt.c",
+              "RelativeToolTip": "shadow_idt.c",
+              "ViewState": "AgIAAAAAAAAAAAAAAAAAAB4AAAAeAAAAAAAAAA==",
+              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000423|",
+              "WhenOpened": "2025-11-29T12:44:03.311Z",
+              "EditorCaption": ""
+            },
+            {
+              "$type": "Document",
+              "DocumentIndex": 1,
+              "Title": "smp.c",
+              "DocumentMoniker": "C:\\Users\\stark\\OneDrive\\\u0420\u0430\u0431\u043E\u0447\u0438\u0439 \u0441\u0442\u043E\u043B\\svm-vmm\\smp.c",
+              "RelativeDocumentMoniker": "smp.c",
+              "ToolTip": "C:\\Users\\stark\\OneDrive\\\u0420\u0430\u0431\u043E\u0447\u0438\u0439 \u0441\u0442\u043E\u043B\\svm-vmm\\smp.c",
+              "RelativeToolTip": "smp.c",
+              "ViewState": "AgIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==",
+              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000423|",
+              "WhenOpened": "2025-11-29T12:44:00.306Z",
+              "EditorCaption": ""
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

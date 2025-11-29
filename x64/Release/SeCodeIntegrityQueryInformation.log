@@ -1,0 +1,15 @@
+﻿C:\SeCodeIntegrityQueryInformationHV\SeCodeIntegrityQueryInformation.vcxproj(69,5): warning MSB4011: невозможно повторно импортировать "C:\Program Files\Microsoft Visual Studio\2022\Community\MSBuild\Microsoft\VC\v170\BuildCustomizations\masm.props". Он уже был импортирован в "C:\Program Files (x86)\Windows Kits\10\build\10.0.26100.0\WindowsDriver.Shared.props (366,3)". Скорее всего это связано с ошибкой при написании кода сборки. Повторный импорт будет пропущен. 
+C:\SeCodeIntegrityQueryInformationHV\SeCodeIntegrityQueryInformation.vcxproj(152,5): warning MSB4011: невозможно повторно импортировать "C:\Program Files\Microsoft Visual Studio\2022\Community\MSBuild\Microsoft\VC\v170\BuildCustomizations\masm.targets". Он уже был импортирован в "C:\Program Files (x86)\Windows Kits\10\build\10.0.26100.0\WindowsDriver.common.targets (2087,3)". Скорее всего это связано с ошибкой при написании кода сборки. Повторный импорт будет пропущен. 
+  Building 'SeCodeIntegrityQueryInformation' with toolset 'WindowsKernelModeDriver10.0' and the 'Universal' target platform.
+x64\Release\shadow_idt.obj : warning LNK4042: объект указан более одного раза; лишние не учитываются
+shadow_idt.obj : error LNK2019: ссылка на неразрешенный внешний символ ShadowIdtCommonHandler в функции ShadowIdtAsmHandler.
+shadow_idt.obj : error LNK2019: ссылка на неразрешенный внешний символ g_CurrentVcpu в функции ShadowIdtAsmHandler.
+hooks.obj : error LNK2019: ссылка на неразрешенный внешний символ TranslatorTranslate в функции HookVmmcallDispatch.
+hooks.obj : error LNK2019: ссылка на неразрешенный внешний символ TranslatorGpaToHpa в функции HookVmmcallDispatch.
+hooks.obj : error LNK2019: ссылка на неразрешенный внешний символ ProcessQueryByPid в функции HookVmmcallDispatch.
+hooks.obj : error LNK2019: ссылка на неразрешенный внешний символ ProcessQueryCurrent в функции HookVmmcallDispatch.
+hooks.obj : error LNK2019: ссылка на неразрешенный внешний символ CommSend в функции HookVmmcallDispatch.
+hooks.obj : error LNK2019: ссылка на неразрешенный внешний символ CommReceive в функции HookVmmcallDispatch.
+layers.obj : error LNK2019: ссылка на неразрешенный внешний символ CommInit в функции HvActivateLayeredPipeline.
+layers.obj : error LNK2019: ссылка на неразрешенный внешний символ CommHandleDoorbell в функции HvHandleLayeredNpf.
+C:\SeCodeIntegrityQueryInformationHV\x64\Release\SeCodeIntegrityQueryInformation.sys : fatal error LNK1120: неразрешенных внешних элементов: 10
