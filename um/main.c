@@ -67,18 +67,11 @@ static void probe_mailbox_state(void) {
     }
 }
 
-static void print_menu_hint(void) {
-    puts("-------------------------------------------");
-    puts("[~] svm playground usermode client");
-    puts("[~] calls the hypervisor through vmmcall");
-    puts("-------------------------------------------");
-    puts("");
-}
+
 
 int main(void) {
-    SetConsoleTitleA("svm hypercall playground [~]");
+    SetConsoleTitleA("syscall");
 
-    print_menu_hint();
     printf("[+] make sure the svm driver is loaded first.\n\n");
 
     print_vendor_string();
@@ -87,6 +80,9 @@ int main(void) {
     probe_mailbox_state();
 
     printf("\n[+] done.\n");
+    printf("press enter for exit...");
+    getchar(); 
     return 0;
 }
+
 

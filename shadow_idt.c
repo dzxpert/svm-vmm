@@ -17,7 +17,7 @@ typedef struct _IDT_ENTRY
     UINT32 OffsetHigh;
     UINT32 Zero;
 } IDT_ENTRY;
-
+ 
 typedef struct _IDTR
 {
     UINT16 Limit;

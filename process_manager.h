@@ -10,3 +10,4 @@ typedef struct _PROCESS_DETAILS
 
 NTSTATUS ProcessQueryByPid(HANDLE Pid, PPROCESS_DETAILS Details);
 NTSTATUS ProcessQueryCurrent(PPROCESS_DETAILS Details);
+EXTERN_C PVOID PsGetProcessSectionBaseAddress(PEPROCESS Process);

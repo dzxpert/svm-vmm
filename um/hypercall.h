@@ -6,11 +6,10 @@
 extern "C" {
 #endif
 
-// raw vmmcall entry point implemented in hypercall.asm
+
 uint64_t hv_vmcall(uint64_t code, uint64_t arg1, uint64_t arg2, uint64_t arg3);
 
-// vmcall dispatch codes mirrored from HookVmmcallDispatch inside the hypervisor
-// keep these synced with the driver when adding new calls
+
 typedef enum _hv_vmcall_code {
     hv_vmcall_read_gva = 0x100,
     hv_vmcall_write_gva = 0x101,

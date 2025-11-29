@@ -19,7 +19,14 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT D, PUNICODE_STRING R)
 {
     UNREFERENCED_PARAMETER(R);
 
-	D->DriverUnload = DriverUnload; // <--- maybe cause issue (bsod) if DriverUnload is not defined properly
+    if (D)
+    {
+        D->DriverUnload = DriverUnload;
+    }
+    else
+    {
+        DbgPrint("SVM-HV: DriverEntry called without DriverObject (mapper load), skipping unload registration.\n");
+    }
 
 	NTSTATUS st = SvmInit(&g_Vcpu0); // <--- vgk gamerdog bypass $
     if (!NT_SUCCESS(st))
@@ -29,6 +36,13 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT D, PUNICODE_STRING R)
     }
 
     st = SvmLaunch(g_Vcpu0);
+    if (!NT_SUCCESS(st))
+    {
+        DbgPrint("SVM-HV: vmrun failed: 0x%X\n", st);
+        SvmShutdown(g_Vcpu0);
+        g_Vcpu0 = NULL;
+        return st;
+    }
     DbgPrint("SVM-HV: vmrun returned: 0x%X\n", st);
 
     return STATUS_SUCCESS;

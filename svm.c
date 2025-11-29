@@ -21,11 +21,25 @@ static NTSTATUS SvmCheckSupport()
     int info[4];
     __cpuid(info, 0x80000001);
     if (!(info[2] & (1 << 2)))
+    {
+        DbgPrint("SVM-HV: CPU does not support SVM.\n");
         return STATUS_NOT_SUPPORTED;
+    }
+
+    __cpuid(info, 1);
+    if (info[2] & (1 << 31))
+    {
+        DbgPrint("SVM-HV: Another hypervisor is already active.\n");
+        return STATUS_HV_FEATURE_UNAVAILABLE;
+    }
+
+        
 
     if (MsrRead(MSR_VM_CR) & VM_CR_SVMDIS)
+    {
+        DbgPrint("SVM-HV: SVM is disabled in VM_CR.\n");
         return STATUS_NOT_SUPPORTED;
-
+    }
     return STATUS_SUCCESS;
 }
 
@@ -146,7 +160,16 @@ fail:
 
 NTSTATUS SvmLaunch(VCPU* V)
 {
-    VmrunAsm(V->VmcbPa.QuadPart);
+    if (!V) return STATUS_INVALID_PARAMETER;
+
+    __try
+    {
+        VmrunAsm(V->VmcbPa.QuadPart);
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        return GetExceptionCode();
+    }
     return HypervisorHandleExit(V);
 }
 
