@@ -37,7 +37,7 @@ typedef struct _VMCB_CONTROL_AREA
 
     UINT64 NptControl;
 
-    UINT64 Ncr3;
+    /*UINT64 Ncr3;*/
 
     UINT8 Reserved1[0x70];
 

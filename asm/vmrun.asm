@@ -1,16 +1,15 @@
 option casemap:none
 
-PUBLIC VmrunAsm
-PUBLIC GuestEntry
-
 _TEXT SEGMENT ALIGN(16)
 
+PUBLIC VmrunAsm
 VmrunAsm PROC
     mov     rax, rcx
     vmrun   rax
     ret
 VmrunAsm ENDP
 
+PUBLIC GuestEntry
 GuestEntry PROC
 guest_loop:
     hlt

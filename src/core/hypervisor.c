@@ -127,18 +127,12 @@ static VOID HvHandleIo(VCPU* V)
 
 NTSTATUS HypervisorHandleExit(VCPU* V)
 {
-    if (!V || !V->Vmcb) return STATUS_INVALID_PARAMETER;
-
     VMCB_CONTROL_AREA* c = VmcbControl(V->Vmcb);
+    UINT64 exitCode = c->ExitCode;
 
-    VMCB_STATE_SAVE_AREA* s = VmcbState(V->Vmcb);
-    NptUpdateShadowCr3(&V->Npt, HookDecryptCr3(V, s->Cr3));
+    V->Exec.LastExitCode = exitCode;
 
-    UINT64 exit = c->ExitCode;
-
-    HvRefreshExecLayer(V, exit);
-
-    switch (exit)
+    switch (exitCode)
     {
     case SVM_EXIT_CPUID:
         HvHandleCpuid(V);
@@ -153,19 +147,19 @@ NTSTATUS HypervisorHandleExit(VCPU* V)
         return STATUS_SUCCESS;
 
     case SVM_EXIT_NPF:
+        // layer intercepts first
+        if (HvHandleLayeredNpf(V, c->ExitInfo1))
+            return STATUS_SUCCESS;
+
         HvHandleNpf(V);
         return STATUS_SUCCESS;
 
-    case SVM_EXIT_IOIO:
-        HvHandleIo(V);
-        return STATUS_SUCCESS;
-
     case SVM_EXIT_HLT:
-        HvHandleHlt(V);
         return STATUS_SUCCESS;
 
     default:
-        DbgPrint("HV: Unknown VMEXIT = 0x%llx\n", exit);
         return STATUS_SUCCESS;
     }
 }
+
+

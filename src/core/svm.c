@@ -109,21 +109,16 @@ static NTSTATUS AllocGuestStack(VCPU* V)
 
 static NTSTATUS AllocMsrpm(VCPU* V)
 {
-    V->Msrpm = AllocAligned(MSRPM_SIZE, &V->MsrpmPa);
-    if (!V->Msrpm) return STATUS_INSUFFICIENT_RESOURCES;
-
-    RtlZeroMemory(V->Msrpm, MSRPM_SIZE);
-    return STATUS_SUCCESS;
+    V->Msrpm = AllocAligned(0x6000, &V->MsrpmPa);
+    return V->Msrpm ? STATUS_SUCCESS : STATUS_INSUFFICIENT_RESOURCES;
 }
 
 static NTSTATUS AllocIopm(VCPU* V)
 {
-    V->Iopm = AllocAligned(IOPM_SIZE, &V->IopmPa);
-    if (!V->Iopm) return STATUS_INSUFFICIENT_RESOURCES;
-
-    RtlZeroMemory(V->Iopm, IOPM_SIZE);
-    return STATUS_SUCCESS;
+    V->Iopm = AllocAligned(0x2000, &V->IopmPa);
+    return V->Iopm ? STATUS_SUCCESS : STATUS_INSUFFICIENT_RESOURCES;
 }
+
 
 
 //======================================================================
@@ -133,14 +128,12 @@ static VOID SetupGuest(VCPU* V)
 {
     VMCB_STATE_SAVE_AREA* s = VmcbState(V->Vmcb);
 
-    // RIP/RSP
+    RtlZeroMemory(s, sizeof(*s));
+
     s->Rip = (UINT64)GuestEntry;
     s->Rsp = (UINT64)V->GuestStack + V->GuestStackSize - 0x20;
     s->Rflags = 0x2;
 
-    //
-    // VALID AMD LONG MODE SEGMENTS (ACCEPTED ON VM-ENTRY)
-    //
     s->CsSelector = 0x10;
     s->CsAttributes = 0xA09B;
     s->CsLimit = 0xFFFFFFFF;
@@ -161,26 +154,19 @@ static VOID SetupGuest(VCPU* V)
     s->EsLimit = 0xFFFFFFFF;
     s->EsBase = 0;
 
-
-    // IDT / GDT CAN BE ZERO — AMD ALLOWS IT IN 64-BIT FLAT MODE
     s->GdtrBase = 0;
     s->GdtrLimit = 0;
     s->IdtrBase = 0;
     s->IdtrLimit = 0;
 
-    //
-    // CR registers
-    //
-    s->Cr0 = __readcr0() | 0x80000001ULL; // PE + PG
+    s->Cr0 = __readcr0() | 0x80000001ULL;
     s->Cr4 = __readcr4();
-    s->Efer = MsrRead(MSR_EFER);
     s->Cr3 = __readcr3();
+    s->Efer = MsrRead(MSR_EFER);
 
-    //
-    // NPT shadow CR3
-    //
     NptUpdateShadowCr3(&V->Npt, s->Cr3);
 }
+
 
 
 
@@ -191,15 +177,14 @@ static VOID SetupControls(VCPU* V)
 {
     VMCB_CONTROL_AREA* c = VmcbControl(V->Vmcb);
 
-    c->VmcbCleanBits = 0;
+    RtlZeroMemory(c, sizeof(*c));
+
     c->GuestAsid = 1;
+    c->VmcbCleanBits = 0;
 
     c->InterceptInstruction1 =
         (1 << 0) |  // CPUID
-        (1 << 1) |  // HLT
         (1 << 2);   // VMMCALL
-
-    c->InterceptInstruction2 = 0;
 
     c->MsrpmBasePa = V->MsrpmPa.QuadPart;
     c->IopmBasePa = V->IopmPa.QuadPart;
@@ -207,10 +192,11 @@ static VOID SetupControls(VCPU* V)
     c->NptControl = 1;
 
     //
-    // Correct root for nested paging
+    // TSC offset cloaking
     //
-    MsrWrite(MSR_NESTED_CR3, V->Npt.Pml4Pa.QuadPart);
+    c->TscOffset = V->CloakedTscOffset;
 }
+
 
 
 

@@ -436,26 +436,39 @@ static UINT64 NptGetMaxPhysicalAddress()
     return maxPa;
 }
 
-//
-// Initialize full NPT (identity map) for entire 48-bit GPA
-//
+
 NTSTATUS NptInitialize(NPT_STATE* State)
 {
     if (!State) return STATUS_INVALID_PARAMETER;
     RtlZeroMemory(State, sizeof(*State));
 
+    //
     // Fake pages
+    //
     for (ULONG i = 0; i < 2; i++)
     {
-        State->FakePageVa[i] = MmAllocateContiguousMemorySpecifyCache(PAGE_SIZE,
-            (PHYSICAL_ADDRESS) { 0 }, (PHYSICAL_ADDRESS) { .QuadPart = ~0ULL }, (PHYSICAL_ADDRESS) { 0 }, MmCached);
-        if (!State->FakePageVa[i]) return STATUS_INSUFFICIENT_RESOURCES;
+        State->FakePageVa[i] =
+            MmAllocateContiguousMemorySpecifyCache(PAGE_SIZE,
+                (PHYSICAL_ADDRESS) {
+            0
+        },
+                (PHYSICAL_ADDRESS) {
+            .QuadPart = ~0ULL
+        },
+                (PHYSICAL_ADDRESS) {
+            0
+        }, MmCached);
+
+        if (!State->FakePageVa[i])
+            return STATUS_INSUFFICIENT_RESOURCES;
 
         RtlZeroMemory(State->FakePageVa[i], PAGE_SIZE);
         State->FakePagePa[i] = MmGetPhysicalAddress(State->FakePageVa[i]);
     }
 
-    // Allocate PML4
+    //
+    // Allocate PML4 table
+    //
     PHYSICAL_ADDRESS pml4Pa;
     NPT_ENTRY* pml4 = NptAllocTable(&pml4Pa);
     if (!pml4) return STATUS_INSUFFICIENT_RESOURCES;
@@ -463,29 +476,25 @@ NTSTATUS NptInitialize(NPT_STATE* State)
     State->Pml4 = pml4;
     State->Pml4Pa = pml4Pa;
 
-    UINT64 maxPa = NptGetMaxPhysicalAddress();
-    if (!maxPa)
-        return STATUS_INSUFFICIENT_RESOURCES;
+    //
+    // Map ONLY 1GB
+    //
+    UINT64 mapLimit = 1ULL * 1024 * 1024 * 1024; // 1GB
+    UINT64 pageCount = mapLimit / 0x200000ULL;   // 2MB pages
 
-    // Map physical memory using 2MB large pages
-    UINT64 maxPaAligned = (maxPa + 0x1FFFFFULL) & ~0x1FFFFFULL; // align up to 2MB
-    UINT64 largePageCount = maxPaAligned / 0x200000ULL;
-
-    for (UINT64 pageIndex = 0; pageIndex < largePageCount; pageIndex++)
+    for (UINT64 i = 0; i < pageCount; i++)
     {
-        UINT64 phys = pageIndex * 0x200000ULL;
+        UINT64 phys = i * 0x200000ULL;
 
         UINT64 pml4_i = (phys >> 39) & 0x1FF;
         UINT64 pdpt_i = (phys >> 30) & 0x1FF;
         UINT64 pd_i = (phys >> 21) & 0x1FF;
 
-        NPT_ENTRY* pdpt = NptEnsureSubtable(State->Pml4, pml4_i);
-        if (!pdpt)
-            return STATUS_INSUFFICIENT_RESOURCES;
+        NPT_ENTRY* pdpt = NptEnsureSubtable(pml4, pml4_i);
+        if (!pdpt) return STATUS_INSUFFICIENT_RESOURCES;
 
         NPT_ENTRY* pd = NptEnsureSubtable(pdpt, pdpt_i);
-        if (!pd)
-            return STATUS_INSUFFICIENT_RESOURCES;
+        if (!pd) return STATUS_INSUFFICIENT_RESOURCES;
 
         NPT_ENTRY* pde = &pd[pd_i];
         if (!pde->Present)
@@ -499,6 +508,7 @@ NTSTATUS NptInitialize(NPT_STATE* State)
 
     return STATUS_SUCCESS;
 }
+
 
 
 //
