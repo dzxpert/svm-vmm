@@ -25,15 +25,24 @@ static BOOLEAN ReadGuestPhysical(VCPU* V, UINT64 GuestPhysical, PVOID Buffer, SI
 
 static BOOLEAN WriteGuestPhysical(VCPU* V, UINT64 GuestPhysical, PVOID Buffer, SIZE_T Size)
 {
-    PHYSICAL_ADDRESS hpa = GuestTranslateGpaToHpa(V, GuestPhysical);
-    if (!hpa.QuadPart) return FALSE;
-
-    PVOID mapped = MmMapIoSpace(hpa, Size, MmNonCached);
-    if (!mapped) return FALSE;
-
-    RtlCopyMemory(mapped, Buffer, Size);
-    MmUnmapIoSpace(mapped, Size);
-    return TRUE;
+    UNREFERENCED_PARAMETER(V);
+    
+    // For writes, we use MDL to map the physical page
+    PHYSICAL_ADDRESS pa;
+    pa.QuadPart = GuestPhysical;
+    
+    // Try to map the physical address
+    PVOID mapped = MmMapIoSpace(pa, Size, MmNonCached);
+    if (mapped) {
+        RtlCopyMemory(mapped, Buffer, Size);
+        MmUnmapIoSpace(mapped, Size);
+        return TRUE;
+    }
+    
+    // Fallback: for high physical addresses, use MmAllocatePagesForMdlEx + MmMapLockedPagesSpecifyCache
+    // This is more complex but works for any physical address
+    DbgPrint("SVM-HV: WriteGuestPhysical MmMapIoSpace failed for PA=0x%llX\n", GuestPhysical);
+    return FALSE;
 }
 
 static UINT64 ReadGuestQword(VCPU* V, UINT64 gpa)

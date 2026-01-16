@@ -67,7 +67,33 @@ static void probe_mailbox_state(void) {
     }
 }
 
-
+static void test_hypervisor_write(void) {
+    // Test: Write to our own memory via hypervisor
+    volatile uint64_t test_value = 0xDEADBEEF12345678ULL;
+    uint64_t original = test_value;
+    uint64_t new_value = 0xCAFEBABE87654321ULL;
+    
+    printf("\n[+] === HYPERVISOR WRITE TEST ===\n");
+    printf("[+] test_value address: 0x%p\n", &test_value);
+    printf("[+] original value: 0x%016llx\n", original);
+    printf("[+] writing new value via hypervisor: 0x%016llx\n", new_value);
+    
+    // Write via hypervisor (0x101 = write_gva)
+    uint64_t result = safe_vmcall(hv_vmcall_write_gva, (uint64_t)&test_value, new_value, 0);
+    
+    // Check if value changed
+    printf("[+] write hypercall returned: 0x%llx\n", result);
+    printf("[+] test_value after write: 0x%016llx\n", test_value);
+    
+    if (test_value == new_value) {
+        printf("[+] SUCCESS! Hypervisor modified our memory!\n");
+    } else if (test_value == original) {
+        printf("[-] FAILED: Value unchanged, write didn't work\n");
+    } else {
+        printf("[?] UNEXPECTED: Value is 0x%016llx\n", test_value);
+    }
+    printf("[+] ================================\n\n");
+}
 
 int main(void) {
     SetConsoleTitleA("syscall");
@@ -78,6 +104,7 @@ int main(void) {
     dump_process_bases();
     dump_address_translations();
     probe_mailbox_state();
+    test_hypervisor_write();
 
     printf("\n[+] done.\n");
     printf("press enter for exit...");
