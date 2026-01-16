@@ -169,15 +169,11 @@ static VOID NptProtectPageForTrap(NPT_STATE* State, UINT64 gpa, NPT_ENTRY* entry
 
 PHYSICAL_ADDRESS NptTranslateGpaToHpa(NPT_STATE* State, UINT64 gpa)
 {
-    PHYSICAL_ADDRESS pa = { 0 };
-    UINT64 level;
-
-    NPT_ENTRY* entry = NptGetEntry(State, gpa, &level);
-    if (!entry)
-        return pa;
-
-    UINT64 offset = gpa & 0xFFFULL;
-    pa.QuadPart = (entry->PageFrame << 12) + offset;
+    // NPT is identity mapped (GPA == HPA)
+    // Hardware uses NPT tables during VMRUN, but for software translation
+    // we can return GPA directly since it equals HPA
+    PHYSICAL_ADDRESS pa;
+    pa.QuadPart = gpa;
     return pa;
 }
 
