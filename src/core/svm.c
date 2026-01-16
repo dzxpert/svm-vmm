@@ -166,9 +166,9 @@ static VOID SetupVmcbFromContext(VCPU* V, PCONTEXT Ctx)
     c->MsrpmBasePa = V->MsrpmPa.QuadPart;
     c->IopmBasePa = V->IopmPa.QuadPart;
     
-    // DISABLED FOR DEBUGGING - Enable NPT
-    // c->NestedControl = SVM_NESTED_CTL_NP_ENABLE;
-    // c->NestedCr3 = V->Npt.Pml4Pa.QuadPart;
+    // Enable NPT (Nested Page Tables)
+    //c->NestedControl = SVM_NESTED_CTL_NP_ENABLE;
+    //c->NestedCr3 = V->Npt.Pml4Pa.QuadPart;
     
     // TSC offset
     c->TscOffset = V->CloakedTscOffset;

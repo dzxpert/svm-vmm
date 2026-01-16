@@ -6,22 +6,9 @@
 
 static BOOLEAN ReadGuestPhysical(VCPU* V, UINT64 GuestPhysical, PVOID Buffer, SIZE_T Size)
 {
-    PHYSICAL_ADDRESS hpa;
-    hpa.QuadPart = GuestPhysical;
-    
-    // Try MmGetVirtualForPhysical first - works for memory Windows knows about
-    PVOID va = MmGetVirtualForPhysical(hpa);
-    if (va)
-    {
-        __try {
-            RtlCopyMemory(Buffer, va, Size);
-            return TRUE;
-        } __except (EXCEPTION_EXECUTE_HANDLER) {
-            // Fall through to MmMapIoSpace
-        }
-    }
-    
-    // Fallback to MmMapIoSpace for MMIO regions
+    PHYSICAL_ADDRESS hpa = GuestTranslateGpaToHpa(V, GuestPhysical);
+    if (!hpa.QuadPart) return FALSE;
+
     PVOID mapped = MmMapIoSpace(hpa, Size, MmNonCached);
     if (!mapped) return FALSE;
 
@@ -99,11 +86,8 @@ PHYSICAL_ADDRESS GuestTranslateGvaToGpa(VCPU* V, UINT64 Gva)
 
 PHYSICAL_ADDRESS GuestTranslateGpaToHpa(VCPU* V, UINT64 Gpa)
 {
-    // When NPT is disabled on hardware, GPA == HPA (identity mapping)
-    // No need to walk NPT tables - they're only used when nested paging is active
-    PHYSICAL_ADDRESS hpa;
-    hpa.QuadPart = Gpa;
-    return hpa;
+    // Use NPT tables for GPA->HPA translation
+    return NptTranslateGpaToHpa(&V->Npt, Gpa);
 }
 
 PHYSICAL_ADDRESS GuestTranslateGvaToHpa(VCPU* V, UINT64 Gva)
