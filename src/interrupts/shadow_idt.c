@@ -48,7 +48,7 @@ static VOID ShadowHandleException(VCPU* V, UINT32 vector, UINT64 errorCode)
 
     case 14:  
     {
-        VMCB_STATE_SAVE_AREA* s = VmcbState(V->Vmcb);
+        VMCB_STATE_SAVE_AREA* s = VmcbState(&V->GuestVmcb);
         UINT64 faultingAddr = s->Cr2;
 
         DbgPrint("HV: Guest PF at GPA=0x%llx\n", faultingAddr);
@@ -81,8 +81,8 @@ VOID ShadowIdtCommonHandler(VCPU* V, UINT64 vector, UINT64 errorCode)
     ShadowHandleException(V, (UINT32)vector, errorCode);
 
  
-    VMCB_CONTROL_AREA* c = VmcbControl(V->Vmcb);
-    VMCB_STATE_SAVE_AREA* s = VmcbState(V->Vmcb);
+    VMCB_CONTROL_AREA* c = VmcbControl(&V->GuestVmcb);
+    VMCB_STATE_SAVE_AREA* s = VmcbState(&V->GuestVmcb);
 
     if (c->NextRip)
         s->Rip = c->NextRip;
@@ -113,7 +113,7 @@ VOID ShadowIdtInitialize(VCPU* V)
     g_ShadowIdtr.Limit = sizeof(g_ShadowIdt) - 1;
 
   
-    VMCB_STATE_SAVE_AREA* s = VmcbState(V->Vmcb);
+    VMCB_STATE_SAVE_AREA* s = VmcbState(&V->GuestVmcb);
 
     s->Idtr.Base = g_ShadowIdtr.Base;
     s->Idtr.Limit = g_ShadowIdtr.Limit;
@@ -124,7 +124,7 @@ VOID ShadowIdtInitialize(VCPU* V)
 
 VOID ShadowIdtDisable(VCPU* V)
 {
-    VMCB_STATE_SAVE_AREA* s = VmcbState(V->Vmcb);
+    VMCB_STATE_SAVE_AREA* s = VmcbState(&V->GuestVmcb);
 
     s->Idtr.Base = 0;
     s->Idtr.Limit = 0;

@@ -6,6 +6,34 @@
 #define PAGE_ALIGN(x) ((x) & ~0xFFFULL)
 #endif
 
+// PA->VA lookup table since MmGetVirtualForPhysical doesn't work with pool memory
+#define MAX_NPT_TABLES 512
+static struct {
+    UINT64 pa;
+    PVOID va;
+} g_NptTableMap[MAX_NPT_TABLES];
+static ULONG g_NptTableCount = 0;
+
+static VOID NptRegisterTable(UINT64 pa, PVOID va)
+{
+    if (g_NptTableCount < MAX_NPT_TABLES)
+    {
+        g_NptTableMap[g_NptTableCount].pa = pa;
+        g_NptTableMap[g_NptTableCount].va = va;
+        g_NptTableCount++;
+    }
+}
+
+static PVOID NptLookupTable(UINT64 pa)
+{
+    for (ULONG i = 0; i < g_NptTableCount; i++)
+    {
+        if (g_NptTableMap[i].pa == pa)
+            return g_NptTableMap[i].va;
+    }
+    return NULL;
+}
+
 static NPT_ENTRY* NptAllocTable(PHYSICAL_ADDRESS* outPa)
 {
     PHYSICAL_ADDRESS low = { 0 };
@@ -13,17 +41,27 @@ static NPT_ENTRY* NptAllocTable(PHYSICAL_ADDRESS* outPa)
     PHYSICAL_ADDRESS skip = { 0 };
 
     NPT_ENTRY* tbl = MmAllocateContiguousMemorySpecifyCache(PAGE_SIZE, low, high, skip, MmCached);
+    
     if (!tbl)
-        return NULL;
+    {
+        tbl = (NPT_ENTRY*)ExAllocatePoolWithTag(NonPagedPoolNx, PAGE_SIZE, 'NPTB');
+        if (!tbl)
+            return NULL;
+    }
 
     RtlZeroMemory(tbl, PAGE_SIZE);
     *outPa = MmGetPhysicalAddress(tbl);
+    
+    NptRegisterTable(outPa->QuadPart, tbl);
+    
     return tbl;
 }
 
 static NPT_ENTRY* NptResolveTableFromEntry(NPT_ENTRY* entry)
 {
-    return (NPT_ENTRY*)MmGetVirtualForPhysical((PHYSICAL_ADDRESS){ entry->PageFrame << 12 });
+    UINT64 pa = (UINT64)entry->PageFrame << 12;
+    PVOID va = NptLookupTable(pa);
+    return (NPT_ENTRY*)va;
 }
 
 static NPT_ENTRY* NptEnsureSubtable(NPT_ENTRY* parent, UINT64 index)
@@ -60,10 +98,9 @@ static NPT_ENTRY* NptGetEntry(
     if (!pml4[pml4_i].Present)
         return NULL;
 
-    NPT_ENTRY* pdpt = (NPT_ENTRY*)MmGetVirtualForPhysical(
-        (PHYSICAL_ADDRESS) {
-        pml4[pml4_i].PageFrame << 12
-    });
+    NPT_ENTRY* pdpt = (NPT_ENTRY*)NptLookupTable(pml4[pml4_i].PageFrame << 12);
+    if (!pdpt)
+        return NULL;
 
     if (!pdpt[pdpt_i].Present)
         return NULL;
@@ -74,10 +111,9 @@ static NPT_ENTRY* NptGetEntry(
         return &pdpt[pdpt_i];
     }
 
-    NPT_ENTRY* pd = (NPT_ENTRY*)MmGetVirtualForPhysical(
-        (PHYSICAL_ADDRESS) {
-        pdpt[pdpt_i].PageFrame << 12
-    });
+    NPT_ENTRY* pd = (NPT_ENTRY*)NptLookupTable(pdpt[pdpt_i].PageFrame << 12);
+    if (!pd)
+        return NULL;
 
     if (!pd[pd_i].Present)
         return NULL;
@@ -88,10 +124,9 @@ static NPT_ENTRY* NptGetEntry(
         return &pd[pd_i];
     }
 
-    NPT_ENTRY* pt = (NPT_ENTRY*)MmGetVirtualForPhysical(
-        (PHYSICAL_ADDRESS) {
-        pd[pd_i].PageFrame << 12
-    });
+    NPT_ENTRY* pt = (NPT_ENTRY*)NptLookupTable(pd[pd_i].PageFrame << 12);
+    if (!pt)
+        return NULL;
 
     *outLevel = 3;
     return &pt[pt_i];
@@ -475,6 +510,13 @@ NTSTATUS NptInitialize(NPT_STATE* State)
     UINT64 mapLimit = NptGetMaxPhysicalAddress();
     if (!mapLimit)
         return HV_STATUS_NPT_RANGES;
+
+    // Limit to 4GB to reduce memory allocation requirements
+    if (mapLimit > (4ULL << 30))
+    {
+        DbgPrint("SVM-HV: NPT limiting map from 0x%llx to 4GB\n", mapLimit);
+        mapLimit = (4ULL << 30);
+    }
 
     if (mapLimit < (1ULL << 32))
         mapLimit = (1ULL << 32);

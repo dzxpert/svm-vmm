@@ -73,15 +73,14 @@ VOID StealthHideHypervisorMemory(VCPU* V)
     if (!g_StealthEnabled)
         return;
 
-
-    if (g_HideVmcbMemory && V->Vmcb)
+    if (g_HideVmcbMemory)
     {
-        RtlSecureZeroMemory(V->Vmcb, PAGE_SIZE);
+        RtlSecureZeroMemory(&V->GuestVmcb, PAGE_SIZE);
     }
 
-    if (g_HideHostSave && V->HostSave)
+    if (g_HideHostSave)
     {
-        RtlSecureZeroMemory(V->HostSave, PAGE_SIZE);
+        RtlSecureZeroMemory(V->HostStateArea, PAGE_SIZE);
     }
 }
 
@@ -101,7 +100,7 @@ VOID StealthCleanVmcb(VCPU* V)
     if (!g_StealthEnabled)
         return;
 
-    VMCB_CONTROL_AREA* c = VmcbControl(V->Vmcb);
+    VMCB_CONTROL_AREA* c = VmcbControl(&V->GuestVmcb);
 
     c->VmcbClean = 0xFFFFFFFFUL;
 }
