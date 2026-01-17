@@ -9,8 +9,10 @@
 #include "translator.h"
 #include "process_manager.h"
 #include "communication.h"
+#include "sync.h"
 
-
+// Spinlock for protecting global syscall hook state
+static HV_SPINLOCK g_SyscallLock = HV_SPINLOCK_INIT;
 
 static UINT64 g_OriginalLstar = 0;        
 static UINT64 g_OriginalStar = 0;
@@ -39,18 +41,18 @@ static BOOLEAN HookIsCr3PagePresent(VCPU* V, UINT64 cr3)
 VOID HookCpuidEmulate(UINT32 leaf, UINT32 subleaf,
     UINT32* eax, UINT32* ebx, UINT32* ecx, UINT32* edx)
 {
-    //
-    // :  vendor-string
-    //
-    if (leaf == 0)
-    {
-        *ebx = 'V', 'M', 'S', 'V';  // vmsv
-        *ecx = 'H', 'V', 'A', 'M';  // hvam
-        *edx = 'S', 'T', 'E', 'L';  // stel
-    }
-
-
-    *ecx &= ~(1 << 31);  
+    UNREFERENCED_PARAMETER(leaf);
+    UNREFERENCED_PARAMETER(subleaf);
+    UNREFERENCED_PARAMETER(eax);
+    UNREFERENCED_PARAMETER(ebx);
+    UNREFERENCED_PARAMETER(ecx);
+    UNREFERENCED_PARAMETER(edx);
+    
+    // NOTE: Vendor string modification removed - it was malformed and
+    // actually made detection EASIER by creating a non-standard signature.
+    // Better to leave native AMD vendor string intact.
+    // The hypervisor presence leaves (0x40000000+) are now handled in
+    // hypervisor.c by returning zeros.
 }
 
 
@@ -77,7 +79,15 @@ UINT64 HookHandleMsrRead(VCPU* V, UINT64 msr)
 
 VOID HookInstallSyscall(VCPU* V)
 {
-    if (g_SyscallHookEnabled) return;
+    UNREFERENCED_PARAMETER(V);
+    
+    HvSpinLockAcquire(&g_SyscallLock);
+    
+    if (g_SyscallHookEnabled)
+    {
+        HvSpinLockRelease(&g_SyscallLock);
+        return;
+    }
 
     g_OriginalLstar = __readmsr(MSR_LSTAR);
     g_OriginalStar = __readmsr(MSR_STAR);
@@ -91,17 +101,27 @@ VOID HookInstallSyscall(VCPU* V)
         __writemsr(MSR_LSTAR, g_HvSyscallHandler);
         g_SyscallHookEnabled = TRUE;
     }
+    
+    HvSpinLockRelease(&g_SyscallLock);
 }
 
 VOID HookRemoveSyscall()
 {
-    if (!g_SyscallHookEnabled) return;
+    HvSpinLockAcquire(&g_SyscallLock);
+    
+    if (!g_SyscallHookEnabled)
+    {
+        HvSpinLockRelease(&g_SyscallLock);
+        return;
+    }
 
     __writemsr(MSR_LSTAR, g_OriginalLstar);
     __writemsr(MSR_STAR, g_OriginalStar);
     __writemsr(MSR_SFMASK, g_OriginalSfMask);
 
     g_SyscallHookEnabled = FALSE;
+    
+    HvSpinLockRelease(&g_SyscallLock);
 }
 
 VOID HookHandleMsrWrite(VCPU* V, UINT64 msr, UINT64 value)

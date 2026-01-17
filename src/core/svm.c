@@ -159,18 +159,28 @@ static VOID SetupVmcbFromContext(VCPU* V, PCONTEXT Ctx)
     c->VmcbClean = 0;
     
     // Intercepts - use Intercepts array
-    c->Intercepts[3] = (1UL << 18);   // CPUID intercept (bit 18 of word 3)
-    c->Intercepts[4] = (1UL << 0);    // VMRUN intercept
-    c->Intercepts[4] |= (1UL << 1);   // VMMCALL intercept
+    // Word 3: CPUID (bit 18), optionally RDTSC (bit 1) for timing attack mitigation
+    c->Intercepts[3] = SVM_INTERCEPT_CPUID;
+    
+    // Word 4: VMRUN (bit 0), VMMCALL (bit 1), optionally RDTSCP (bit 3)
+    c->Intercepts[4] = SVM_INTERCEPT_VMRUN | SVM_INTERCEPT_VMMCALL;
+    
+    // RDTSC/RDTSCP interception DISABLED by default
+    // WARNING: Enabling causes VM freeze due to extremely high VMEXIT frequency
+    // Windows calls RDTSC thousands of times per second
+    // TODO: Implement smarter timing hiding (TSC scaling, selective interception)
+    // c->Intercepts[3] |= SVM_INTERCEPT_RDTSC;
+    // c->Intercepts[4] |= SVM_INTERCEPT_RDTSCP;
     
     c->MsrpmBasePa = V->MsrpmPa.QuadPart;
     c->IopmBasePa = V->IopmPa.QuadPart;
+    // Enable NPT (Nested Page Tables) for memory virtualization
+    // This enables hardware-assisted address translation: GVA -> GPA -> HPA
+    // NPT tables are identity-mapped (GPA == HPA) by NptInitialize()
+    c->NestedControl = SVM_NESTED_CTL_NP_ENABLE;
+    c->NestedCr3 = V->Npt.Pml4Pa.QuadPart;
     
-    // Enable NPT (Nested Page Tables)
-    //c->NestedControl = SVM_NESTED_CTL_NP_ENABLE;
-    //c->NestedCr3 = V->Npt.Pml4Pa.QuadPart;
-    
-    // TSC offset
+    // TSC offset - used to compensate for VMEXIT overhead
     c->TscOffset = V->CloakedTscOffset;
     
     // Setup state save area from captured context

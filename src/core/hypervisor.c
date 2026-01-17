@@ -29,23 +29,36 @@ static VOID HvAdvanceRIP(VCPU* V, UINT8 len)
 static VOID HvHandleCpuid(VCPU* V, PGUEST_REGISTERS GuestRegs)
 {
     VMCB_STATE_SAVE_AREA* s = VmcbState(&V->GuestVmcb);
+    UNREFERENCED_PARAMETER(s);
 
     UINT64 leaf = GuestRegs->Rax;
     UINT64 sub = GuestRegs->Rcx;
 
-    UINT32 eax, ebx, ecx, edx;
-    __cpuidex((int*)&eax, (int)leaf, (int)sub);
+    UINT32 eax = 0, ebx = 0, ecx = 0, edx = 0;
+    
+    // Handle hypervisor presence leaves (0x40000000-0x400000FF)
+    // Anti-cheat checks these - return zeros to pretend no hypervisor
+    if (leaf >= 0x40000000 && leaf <= 0x400000FF)
+    {
+        eax = 0;
+        ebx = 0;
+        ecx = 0;
+        edx = 0;
+    }
+    else
+    {
+        __cpuidex((int*)&eax, (int)leaf, (int)sub);
 
-    // Hide hypervisor presence
-    if (leaf == 1)
-        ecx &= ~(1 << 31);
+        // Hide hypervisor presence in standard leaves
+        if (leaf == 1)
+            ecx &= ~(1 << 31);  // Clear hypervisor present bit
 
-    if (leaf == 0x80000001)
-        edx &= ~(1 << 2);
-
-    // Apply stealth masks and hook emulation
-    StealthMaskCpuid((UINT32)leaf, &ecx, &edx);
-    HookCpuidEmulate(leaf, sub, &eax, &ebx, &ecx, &edx);
+        if (leaf == 0x80000001)
+            edx &= ~(1 << 2);   // Clear SVM bit
+            
+        // Apply stealth masks
+        StealthMaskCpuid((UINT32)leaf, &ecx, &edx);
+    }
 
     GuestRegs->Rax = eax;
     GuestRegs->Rbx = ebx;
@@ -124,6 +137,55 @@ static VOID HvHandleHlt(VCPU* V)
 }
 
 //
+// Handle RDTSC exit - compensate for VMEXIT overhead to prevent timing detection
+//
+static VOID HvHandleRdtsc(VCPU* V, PGUEST_REGISTERS GuestRegs)
+{
+    VMCB_CONTROL_AREA* c = VmcbControl(&V->GuestVmcb);
+    
+    // Read actual TSC
+    UINT64 tsc = __rdtsc();
+    
+    // Apply TSC offset from VMCB
+    tsc += c->TscOffset;
+    
+    // Subtract approximate VMEXIT overhead to hide timing anomaly
+    // This is an approximation - real overhead varies by CPU
+    tsc -= 500;
+    
+    // Split into EDX:EAX
+    GuestRegs->Rax = (UINT32)tsc;
+    GuestRegs->Rdx = (UINT32)(tsc >> 32);
+    
+    HvAdvanceRIP(V, 2);
+}
+
+//
+// Handle RDTSCP exit - same as RDTSC but also returns IA32_TSC_AUX in ECX
+//
+static VOID HvHandleRdtscp(VCPU* V, PGUEST_REGISTERS GuestRegs)
+{
+    VMCB_CONTROL_AREA* c = VmcbControl(&V->GuestVmcb);
+    
+    // Read actual TSC with processor ID
+    UINT32 aux;
+    UINT64 tsc = __rdtscp(&aux);
+    
+    // Apply TSC offset
+    tsc += c->TscOffset;
+    
+    // Subtract VMEXIT overhead
+    tsc -= 500;
+    
+    // Split into EDX:EAX, ECX = aux
+    GuestRegs->Rax = (UINT32)tsc;
+    GuestRegs->Rdx = (UINT32)(tsc >> 32);
+    GuestRegs->Rcx = aux;
+    
+    HvAdvanceRIP(V, 3);
+}
+
+//
 // Handle I/O exit
 //
 static VOID HvHandleIo(VCPU* V)
@@ -179,9 +241,29 @@ EXTERN_C BOOLEAN HandleVmExit(VCPU* V, PGUEST_REGISTERS GuestRegs)
         HvHandleIo(V);
         break;
 
+    case SVM_EXIT_RDTSC:
+        HvHandleRdtsc(V, GuestRegs);
+        break;
+
+    case SVM_EXIT_RDTSCP:
+        HvHandleRdtscp(V, GuestRegs);
+        break;
+
+    case SVM_EXIT_VINTR:
+        // Virtual interrupt pending - clear V_IRQ to acknowledge
+        // The interrupt will be delivered to guest on next VMRUN
+        c->InterruptControl &= ~(1UL << 8);  // Clear V_IRQ bit
+        break;
+
     default:
-        // Unknown exit - just advance RIP
-        HvAdvanceRIP(V, 1);
+        // Unknown exit - log and inject #UD exception to guest
+        // This is safer than blindly advancing RIP by 1 byte
+        DbgPrint("SVM-HV: [CPU %llu] Unhandled VMEXIT 0x%llX at RIP 0x%llX\n",
+                 V->HostStackLayout.ProcessorIndex, exitCode, s->Rip);
+        
+        // Inject #UD (Invalid Opcode) exception
+        // EventInjection format: [31]=Valid, [10:8]=Type (3=Exception), [7:0]=Vector (6=#UD)
+        c->EventInjection = (1UL << 31) | (3UL << 8) | 6;
         break;
     }
 

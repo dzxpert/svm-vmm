@@ -75,6 +75,7 @@ static NPT_ENTRY* NptEnsureSubtable(NPT_ENTRY* parent, UINT64 index)
 
         parent[index].Present = 1;
         parent[index].Write = 1;
+        parent[index].User = 1;  // Required for NPT - allows supervisor mode access
         parent[index].PageFrame = pa.QuadPart >> 12;
     }
 
@@ -428,6 +429,13 @@ BOOLEAN NptInstallShadowHook(NPT_STATE* State, UINT64 TargetGpa, UINT64 NewHpa)
     State->ShadowHook.TargetGpaPage = TargetGpa & ~0xFFFULL;
     State->ShadowHook.NewHpaPage = NewHpa & ~0xFFFULL;
     State->ShadowHook.Active = TRUE;
+    
+    // Mark that TLB needs flushing on next VMRUN
+    // The VMCB TlbControl field will be set by the caller or VMEXIT handler
+    // NOTE: For proper multi-core support, an IPI should be sent to all cores
+    // to flush their TLBs. For now, we rely on the ASID/TLB control mechanism.
+    State->TlbFlushPending = TRUE;
+    
     return TRUE;
 }
 
@@ -439,6 +447,9 @@ VOID NptClearShadowHook(NPT_STATE* State)
     State->ShadowHook.Active = FALSE;
     State->ShadowHook.TargetGpaPage = 0;
     State->ShadowHook.NewHpaPage = 0;
+    
+    // Mark TLB flush needed to restore original mappings
+    State->TlbFlushPending = TRUE;
 }
 
 static UINT64 NptGetMaxPhysicalAddress()
@@ -507,13 +518,11 @@ NTSTATUS NptInitialize(NPT_STATE* State)
     if (!mapLimit)
         return HV_STATUS_NPT_RANGES;
 
-    // Limit to 4GB to reduce memory allocation requirements
-    if (mapLimit > (4ULL << 30))
-    {
-        DbgPrint("SVM-HV: NPT limiting map from 0x%llx to 4GB\n", mapLimit);
-        mapLimit = (4ULL << 30);
-    }
+    // Map ALL physical memory - required when NPT is enabled
+    // The 4GB limit was causing freezes on systems with >4GB RAM
+    DbgPrint("SVM-HV: NPT mapping all physical memory up to 0x%llx\n", mapLimit);
 
+    // Ensure minimum of 4GB for MMIO regions
     if (mapLimit < (1ULL << 32))
         mapLimit = (1ULL << 32);
 
@@ -549,6 +558,7 @@ NTSTATUS NptInitialize(NPT_STATE* State)
         {
             pde->Present = 1;
             pde->Write = 1;
+            pde->User = 1;  // Required for NPT - allows supervisor mode access
             pde->LargePage = 1;
             pde->PageFrame = phys >> 12;
         }

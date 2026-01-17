@@ -61,6 +61,9 @@ typedef struct _NPT_STATE
         UINT64 NewHpaPage;
         BOOLEAN Active;
     } ShadowHook;
+    
+    // Flag to track when TLB flush is needed after hook operations
+    BOOLEAN TlbFlushPending;
 } NPT_STATE;
 
 NTSTATUS NptInitialize(NPT_STATE* State);
