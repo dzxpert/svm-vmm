@@ -66,8 +66,10 @@ typedef struct _NPT_STATE
     BOOLEAN TlbFlushPending;
 } NPT_STATE;
 
+VOID NptGlobalInit(VOID);
 NTSTATUS NptInitialize(NPT_STATE* State);
 VOID NptDestroy(NPT_STATE* State);
+PVOID NptLookupTable(UINT64 pa);
 
 PHYSICAL_ADDRESS NptTranslateGvaToHpa(NPT_STATE* State, UINT64 Gva);
 PHYSICAL_ADDRESS NptTranslateGpaToHpa(NPT_STATE* State, UINT64 Gpa);

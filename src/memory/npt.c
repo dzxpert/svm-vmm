@@ -7,31 +7,80 @@
 #endif
 
 // PA->VA lookup table since MmGetVirtualForPhysical doesn't work with pool memory
-#define MAX_NPT_TABLES 512
+#define MAX_NPT_TABLES 2048  // Increased for 16+ core support (~35 tables per core)
 static struct {
     UINT64 pa;
     PVOID va;
 } g_NptTableMap[MAX_NPT_TABLES];
 static ULONG g_NptTableCount = 0;
+static KSPIN_LOCK g_NptTableLock;
+static BOOLEAN g_NptTableLockInitialized = FALSE;
+
+static VOID NptInitTableLock(VOID)
+{
+    if (!g_NptTableLockInitialized)
+    {
+        KeInitializeSpinLock(&g_NptTableLock);
+        g_NptTableLockInitialized = TRUE;
+    }
+}
+
+//
+// Call this ONCE from DriverEntry before any SmpInitialize
+//
+VOID NptGlobalInit(VOID)
+{
+    if (!g_NptTableLockInitialized)
+    {
+        KeInitializeSpinLock(&g_NptTableLock);
+        g_NptTableLockInitialized = TRUE;
+        g_NptTableCount = 0;
+        RtlZeroMemory(g_NptTableMap, sizeof(g_NptTableMap));
+        DbgPrint("SVM-HV: NPT global state initialized\n");
+    }
+}
+
 
 static VOID NptRegisterTable(UINT64 pa, PVOID va)
 {
+    KIRQL oldIrql;
+    
+    NptInitTableLock();
+    KeAcquireSpinLock(&g_NptTableLock, &oldIrql);
+    
     if (g_NptTableCount < MAX_NPT_TABLES)
     {
         g_NptTableMap[g_NptTableCount].pa = pa;
         g_NptTableMap[g_NptTableCount].va = va;
         g_NptTableCount++;
     }
+    else
+    {
+        DbgPrint("SVM-HV: WARNING - NPT table map full!\n");
+    }
+    
+    KeReleaseSpinLock(&g_NptTableLock, oldIrql);
 }
 
-static PVOID NptLookupTable(UINT64 pa)
+PVOID NptLookupTable(UINT64 pa)
 {
+    KIRQL oldIrql;
+    PVOID result = NULL;
+    
+    NptInitTableLock();
+    KeAcquireSpinLock(&g_NptTableLock, &oldIrql);
+    
     for (ULONG i = 0; i < g_NptTableCount; i++)
     {
         if (g_NptTableMap[i].pa == pa)
-            return g_NptTableMap[i].va;
+        {
+            result = g_NptTableMap[i].va;
+            break;
+        }
     }
-    return NULL;
+    
+    KeReleaseSpinLock(&g_NptTableLock, oldIrql);
+    return result;
 }
 
 static NPT_ENTRY* NptAllocTable(PHYSICAL_ADDRESS* outPa)
@@ -46,26 +95,70 @@ static NPT_ENTRY* NptAllocTable(PHYSICAL_ADDRESS* outPa)
     {
         tbl = (NPT_ENTRY*)ExAllocatePoolWithTag(NonPagedPoolNx, PAGE_SIZE, 'NPTB');
         if (!tbl)
+        {
+            DbgPrint("SVM-HV: CRITICAL - NPT table allocation failed!\n");
             return NULL;
+        }
     }
 
     RtlZeroMemory(tbl, PAGE_SIZE);
     *outPa = MmGetPhysicalAddress(tbl);
     
+    // Fix #4: Validate physical address
+    if (outPa->QuadPart == 0 || outPa->QuadPart == ~0ULL)
+    {
+        DbgPrint("SVM-HV: CRITICAL - Invalid physical address 0x%llX for NPT table!\n", 
+                 outPa->QuadPart);
+        
+        // Try to free the memory
+        __try {
+            MmFreeContiguousMemory(tbl);
+        } __except(EXCEPTION_EXECUTE_HANDLER) {
+            ExFreePoolWithTag(tbl, 'NPTB');
+        }
+        
+        return NULL;
+    }
+    
     NptRegisterTable(outPa->QuadPart, tbl);
     
+    DbgPrint("SVM-HV: NPT table allocated - VA=%p PA=0x%llX\n", tbl, outPa->QuadPart);
     return tbl;
 }
 
 static NPT_ENTRY* NptResolveTableFromEntry(NPT_ENTRY* entry)
 {
+    if (!entry || !entry->Present)
+        return NULL;
+        
     UINT64 pa = (UINT64)entry->PageFrame << 12;
+    if (pa == 0)
+        return NULL;
+        
     PVOID va = NptLookupTable(pa);
+    if (!va)
+    {
+        DbgPrint("SVM-HV: NptResolveTableFromEntry - lookup failed for PA 0x%llX\n", pa);
+    }
     return (NPT_ENTRY*)va;
 }
 
 static NPT_ENTRY* NptEnsureSubtable(NPT_ENTRY* parent, UINT64 index)
 {
+    // Validate parent pointer before access
+    if (!parent)
+    {
+        DbgPrint("SVM-HV: NptEnsureSubtable - NULL parent!\n");
+        return NULL;
+    }
+    
+    // Check if address is valid before dereferencing
+    if (!MmIsAddressValid(parent))
+    {
+        DbgPrint("SVM-HV: NptEnsureSubtable - invalid parent address %p\n", parent);
+        return NULL;
+    }
+    
     if (!parent[index].Present)
     {
         PHYSICAL_ADDRESS pa;
@@ -477,20 +570,17 @@ NTSTATUS NptInitialize(NPT_STATE* State)
     if (!State) return STATUS_INVALID_PARAMETER;
     RtlZeroMemory(State, sizeof(*State));
 
-    
+    // Initialize spinlock for table map
+    NptInitTableLock();
+
+    // Allocate fake pages (for hardware trigger traps)
     for (ULONG i = 0; i < 2; i++)
     {
         State->FakePageVa[i] =
             MmAllocateContiguousMemorySpecifyCache(PAGE_SIZE,
-                (PHYSICAL_ADDRESS) {
-            0
-        },
-                (PHYSICAL_ADDRESS) {
-            .QuadPart = ~0ULL
-        },
-                (PHYSICAL_ADDRESS) {
-            0
-        }, MmCached);
+                (PHYSICAL_ADDRESS) { 0 },
+                (PHYSICAL_ADDRESS) { .QuadPart = ~0ULL },
+                (PHYSICAL_ADDRESS) { 0 }, MmCached);
 
         if (!State->FakePageVa[i])
         {
@@ -502,7 +592,7 @@ NTSTATUS NptInitialize(NPT_STATE* State)
         State->FakePagePa[i] = MmGetPhysicalAddress(State->FakePageVa[i]);
     }
 
-    
+    // Allocate PML4
     PHYSICAL_ADDRESS pml4Pa;
     NPT_ENTRY* pml4 = NptAllocTable(&pml4Pa);
     if (!pml4)
@@ -514,56 +604,160 @@ NTSTATUS NptInitialize(NPT_STATE* State)
     State->Pml4 = pml4;
     State->Pml4Pa = pml4Pa;
 
-    UINT64 mapLimit = NptGetMaxPhysicalAddress();
-    if (!mapLimit)
-        return HV_STATUS_NPT_RANGES;
-
-    // Map ALL physical memory - required when NPT is enabled
-    // The 4GB limit was causing freezes on systems with >4GB RAM
-    DbgPrint("SVM-HV: NPT mapping all physical memory up to 0x%llx\n", mapLimit);
-
-    // Ensure minimum of 4GB for MMIO regions
-    if (mapLimit < (1ULL << 32))
-        mapLimit = (1ULL << 32);
-
-    mapLimit = (mapLimit + 0x1FFFFFULL) & ~0x1FFFFFULL;
-    UINT64 pageCount = mapLimit / 0x200000ULL;
-
-    DbgPrint("SVM-HV: NPT map limit=0x%llx pages=%llu\n", mapLimit, pageCount);
-
-    for (UINT64 i = 0; i < pageCount; i++)
+    // ========== FIX #1: Map only valid RAM ranges from Windows ==========
+    PPHYSICAL_MEMORY_RANGE ranges = MmGetPhysicalMemoryRanges();
+    if (!ranges)
     {
-        UINT64 phys = i * 0x200000ULL;
+        DbgPrint("SVM-HV: MmGetPhysicalMemoryRanges failed\n");
+        return HV_STATUS_NPT_RANGES;
+    }
 
+    DbgPrint("SVM-HV: Physical Memory Ranges:\n");
+
+    // Map ONLY valid RAM ranges
+    for (PPHYSICAL_MEMORY_RANGE r = ranges; 
+         r->BaseAddress.QuadPart || r->NumberOfBytes.QuadPart; 
+         r++)
+    {
+        UINT64 rangeStart = r->BaseAddress.QuadPart;
+        UINT64 rangeEnd = rangeStart + r->NumberOfBytes.QuadPart;
+        
+        DbgPrint("  Range: 0x%016llX - 0x%016llX (%llu MB)\n", 
+                 rangeStart, rangeEnd, 
+                 r->NumberOfBytes.QuadPart / (1024*1024));
+
+        // Align to 2MB boundaries (NPT uses 2MB large pages)
+        // Round DOWN start to include any 2MB page containing RAM
+        // Round UP end to include all RAM
+        UINT64 pageStart = rangeStart & ~0x1FFFFFULL;  // Round down
+        UINT64 pageEnd = (rangeEnd + 0x1FFFFFULL) & ~0x1FFFFFULL;  // Round up
+        
+        DbgPrint("  Mapping 2MB pages: 0x%llX - 0x%llX\n", pageStart, pageEnd);
+        
+        // Map each 2MB page in this range
+        for (UINT64 phys = pageStart; phys < pageEnd; phys += 0x200000ULL)
+        {
+            UINT64 pml4_i = (phys >> 39) & 0x1FF;
+            UINT64 pdpt_i = (phys >> 30) & 0x1FF;
+            UINT64 pd_i = (phys >> 21) & 0x1FF;
+
+            NPT_ENTRY* pdpt = NptEnsureSubtable(pml4, pml4_i);
+            if (!pdpt)
+            {
+                DbgPrint("SVM-HV: NPT PDPT alloc failed (pml4=%llu)\n", pml4_i);
+                ExFreePool(ranges);
+                return HV_STATUS_NPT_PDPT;
+            }
+
+            NPT_ENTRY* pd = NptEnsureSubtable(pdpt, pdpt_i);
+            if (!pd)
+            {
+                DbgPrint("SVM-HV: NPT PD alloc failed (pml4=%llu pdpt=%llu)\n", 
+                         pml4_i, pdpt_i);
+                ExFreePool(ranges);
+                return HV_STATUS_NPT_PD;
+            }
+
+            NPT_ENTRY* pde = &pd[pd_i];
+            if (!pde->Present)
+            {
+                pde->Present = 1;
+                pde->Write = 1;
+                pde->User = 1;      // Required for NPT
+                pde->LargePage = 1; // 2MB page
+                pde->PageFrame = phys >> 12;
+            }
+        }
+    }
+
+    ExFreePool(ranges);
+
+    // ========== Map critical MMIO regions ==========
+    DbgPrint("SVM-HV: Mapping MMIO regions...\n");
+    
+    // Map first 2MB for legacy regions (real mode IVT, BDA, etc.)
+    // This is needed for some BIOS/UEFI interactions
+    {
+        UINT64 phys = 0;
         UINT64 pml4_i = (phys >> 39) & 0x1FF;
         UINT64 pdpt_i = (phys >> 30) & 0x1FF;
         UINT64 pd_i = (phys >> 21) & 0x1FF;
 
         NPT_ENTRY* pdpt = NptEnsureSubtable(pml4, pml4_i);
-        if (!pdpt)
+        if (pdpt)
         {
-            DbgPrint("SVM-HV: NPT PDPT alloc failed (pml4=%llu)\n", pml4_i);
-            return HV_STATUS_NPT_PDPT;
+            NPT_ENTRY* pd = NptEnsureSubtable(pdpt, pdpt_i);
+            if (pd)
+            {
+                NPT_ENTRY* pde = &pd[pd_i];
+                if (!pde->Present)
+                {
+                    pde->Present = 1;
+                    pde->Write = 1;
+                    pde->User = 1;
+                    pde->LargePage = 1;
+                    pde->PageFrame = phys >> 12;
+                    DbgPrint("SVM-HV: Mapped legacy region 0x%llX\n", phys);
+                }
+            }
         }
+    }
+    
+    // Map APIC region (0xFEE00000) - typically 4KB but we use 2MB page containing it
+    {
+        UINT64 apicBase = 0xFEC00000ULL;  // 2MB-aligned base containing APIC
+        UINT64 pml4_i = (apicBase >> 39) & 0x1FF;
+        UINT64 pdpt_i = (apicBase >> 30) & 0x1FF;
+        UINT64 pd_i = (apicBase >> 21) & 0x1FF;
+
+        NPT_ENTRY* pdpt = NptEnsureSubtable(pml4, pml4_i);
+        if (pdpt)
+        {
+            NPT_ENTRY* pd = NptEnsureSubtable(pdpt, pdpt_i);
+            if (pd)
+            {
+                NPT_ENTRY* pde = &pd[pd_i];
+                if (!pde->Present)
+                {
+                    pde->Present = 1;
+                    pde->Write = 1;
+                    pde->User = 1;
+                    pde->LargePage = 1;
+                    pde->CacheDisable = 1;  // Critical for MMIO!
+                    pde->PageFrame = apicBase >> 12;
+                    DbgPrint("SVM-HV: Mapped APIC region 0x%llX\n", apicBase);
+                }
+            }
+        }
+    }
+    
+    // Map PCI MMIO range (0xE0000000 - 0xF0000000) as 2MB pages
+    for (UINT64 addr = 0xE0000000ULL; addr < 0xF0000000ULL; addr += 0x200000ULL)
+    {
+        UINT64 pml4_i = (addr >> 39) & 0x1FF;
+        UINT64 pdpt_i = (addr >> 30) & 0x1FF;
+        UINT64 pd_i = (addr >> 21) & 0x1FF;
+
+        NPT_ENTRY* pdpt = NptEnsureSubtable(pml4, pml4_i);
+        if (!pdpt) continue;
 
         NPT_ENTRY* pd = NptEnsureSubtable(pdpt, pdpt_i);
-        if (!pd)
-        {
-            DbgPrint("SVM-HV: NPT PD alloc failed (pml4=%llu pdpt=%llu)\n", pml4_i, pdpt_i);
-            return HV_STATUS_NPT_PD;
-        }
+        if (!pd) continue;
 
         NPT_ENTRY* pde = &pd[pd_i];
         if (!pde->Present)
         {
             pde->Present = 1;
             pde->Write = 1;
-            pde->User = 1;  // Required for NPT - allows supervisor mode access
+            pde->User = 1;
             pde->LargePage = 1;
-            pde->PageFrame = phys >> 12;
+            pde->CacheDisable = 1;  // Important for MMIO!
+            pde->PageFrame = addr >> 12;
         }
     }
+    DbgPrint("SVM-HV: Mapped PCI MMIO region 0xE0000000-0xF0000000\n");
 
+    DbgPrint("SVM-HV: NPT initialization complete\n");
     return STATUS_SUCCESS;
 }
 
@@ -589,7 +783,7 @@ VOID NptDestroy(NPT_STATE* State)
                 continue;
 
             NPT_ENTRY* pdpt = NptResolveTableFromEntry(&State->Pml4[pml4_i]);
-            if (!pdpt)
+            if (!pdpt || !MmIsAddressValid(pdpt))
                 continue;
 
             for (UINT64 pdpt_i = 0; pdpt_i < 512; pdpt_i++)
@@ -598,7 +792,7 @@ VOID NptDestroy(NPT_STATE* State)
                     continue;
 
                 NPT_ENTRY* pd = NptResolveTableFromEntry(&pdpt[pdpt_i]);
-                if (pd)
+                if (pd && MmIsAddressValid(pd))
                     MmFreeContiguousMemory(pd);
             }
 

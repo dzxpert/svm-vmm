@@ -117,7 +117,11 @@ static VOID HvHandleNpf(VCPU* V)
 {
     VMCB_CONTROL_AREA* c = VmcbControl(&V->GuestVmcb);
 
-    UINT64 fault_gpa = c->ExitInfo2;
+    UINT64 fault_gpa = c->ExitInfo2;  // Faulting guest physical address
+    UINT64 error_code = c->ExitInfo1; // NPF error code
+    
+    DbgPrint("SVM-HV: NPF at GPA=0x%llX ErrorCode=0x%llX RIP=0x%llX\n",
+             fault_gpa, error_code, VmcbState(&V->GuestVmcb)->Rip);
 
     // Try layered NPF handler first
     if (HvHandleLayeredNpf(V, fault_gpa))
@@ -125,7 +129,86 @@ static VOID HvHandleNpf(VCPU* V)
         return;
     }
 
-    HookNptHandleFault(V, fault_gpa);
+    // Try hook system
+    if (HookNptHandleFault(V, fault_gpa))
+    {
+        DbgPrint("SVM-HV: NPF handled by hook system\n");
+        return;
+    }
+
+    // ========== FIX #5: Handle MMIO region faults dynamically ==========
+    // If NPF is due to missing mapping, try to create it
+    // This handles late MMIO region discovery on bare metal
+    UINT64 page = fault_gpa & ~0x1FFFFFULL;  // Align to 2MB boundary
+    
+    // Check if this looks like an MMIO region (high physical addresses)
+    if (page >= 0xE0000000ULL && page < 0x100000000ULL)
+    {
+        DbgPrint("SVM-HV: Creating NPT mapping for MMIO region 0x%llX\n", page);
+        
+        // Create NPT entry for this MMIO page
+        UINT64 pml4_i = (page >> 39) & 0x1FF;
+        UINT64 pdpt_i = (page >> 30) & 0x1FF;
+        UINT64 pd_i = (page >> 21) & 0x1FF;
+
+        // Walk NPT structure
+        NPT_ENTRY* pml4 = V->Npt.Pml4;
+        if (!pml4)
+        {
+            DbgPrint("SVM-HV: NPT PML4 not initialized!\n");
+            goto inject_fault;
+        }
+
+        // Check/create PDPT entry
+        if (!pml4[pml4_i].Present)
+        {
+            DbgPrint("SVM-HV: PML4[%llu] not present, cannot create MMIO mapping\n", pml4_i);
+            goto inject_fault;
+        }
+
+        // For simplicity, check if we can find the existing PD
+        // A more robust implementation would call NptEnsureSubtable
+        UINT64 pdpt_pa = pml4[pml4_i].PageFrame << 12;
+        NPT_ENTRY* pdpt = (NPT_ENTRY*)NptLookupTable(pdpt_pa);
+        
+        if (pdpt && pdpt[pdpt_i].Present && !pdpt[pdpt_i].LargePage)
+        {
+            UINT64 pd_pa = pdpt[pdpt_i].PageFrame << 12;
+            NPT_ENTRY* pd = (NPT_ENTRY*)NptLookupTable(pd_pa);
+            
+            if (pd)
+            {
+                NPT_ENTRY* pde = &pd[pd_i];
+                if (!pde->Present)
+                {
+                    pde->Present = 1;
+                    pde->Write = 1;
+                    pde->User = 1;
+                    pde->LargePage = 1;
+                    pde->CacheDisable = 1;  // Uncached for MMIO
+                    pde->PageFrame = page >> 12;
+                    
+                    // Mark TLB flush needed
+                    V->Npt.TlbFlushPending = TRUE;
+                    
+                    DbgPrint("SVM-HV: MMIO mapping created successfully for 0x%llX\n", page);
+                    return;
+                }
+            }
+        }
+    }
+
+inject_fault:
+    // If we couldn't handle it, inject #PF to guest
+    DbgPrint("SVM-HV: Unhandled NPF - injecting #PF to guest\n");
+    
+    // Inject #PF (Page Fault) exception to guest
+    // Format: [31]=Valid, [11]=ErrorCodeValid, [10:8]=Type (3=Exception), [7:0]=Vector (14=#PF)
+    c->EventInjection = (1UL << 31) | (1UL << 11) | (3UL << 8) | 14;
+    c->EventInjectionError = (UINT32)error_code;
+    
+    // Set CR2 to faulting address
+    VmcbState(&V->GuestVmcb)->Cr2 = fault_gpa;
 }
 
 //
@@ -269,6 +352,22 @@ EXTERN_C BOOLEAN HandleVmExit(VCPU* V, PGUEST_REGISTERS GuestRegs)
 
     // Copy RAX back to VMCB
     s->Rax = GuestRegs->Rax;
+
+    // ========== FIX #3: Execute TLB flush if pending ==========
+    // Check if TLB flush is needed after hook operations
+    if (V->Npt.TlbFlushPending)
+    {
+        // Method 1: Flush TLB for current ASID
+        // TlbControl values:
+        //   0 = Do nothing (default)
+        //   1 = Flush TLB on next VMRUN
+        //   3 = Flush TLB entries for this guest ASID only
+        c->TlbControl = 3;
+        
+        V->Npt.TlbFlushPending = FALSE;
+        
+        DbgPrint("SVM-HV: TLB flushed after hook operation\n");
+    }
 
     // Return FALSE to continue running guest
     return FALSE;

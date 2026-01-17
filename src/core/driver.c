@@ -2,6 +2,7 @@
 #include "svm.h"
 #include "vcpu.h"
 #include "smp.h"
+#include "npt.h"
 
 
 
@@ -60,6 +61,9 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT D, PUNICODE_STRING R)
     {
         DbgPrint("SVM-HV: DriverEntry called without DriverObject (mapper load), skipping unload registration.\n");
     }
+
+    // Initialize NPT global state (spinlock + table map) before multi-core init
+    NptGlobalInit();
 
 	NTSTATUS st = SmpInitialize(&g_Smp, SMP_INIT_MAX_VCPUS);
     if (!NT_SUCCESS(st))
