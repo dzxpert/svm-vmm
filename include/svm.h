@@ -1,24 +1,38 @@
 #pragma once
 #include <ntifs.h>
 
+// SVM Exit Codes
+#define SVM_EXIT_VINTR        0x61
+#define SVM_EXIT_RDTSC        0x6E
 #define SVM_EXIT_CPUID        0x72
 #define SVM_EXIT_HLT          0x78
 #define SVM_EXIT_IOIO         0x7B
 #define SVM_EXIT_MSR          0x7C
 #define SVM_EXIT_VMMCALL      0x81
+#define SVM_EXIT_RDTSCP       0x87
 #define SVM_EXIT_NPF          0x400
+
+// Intercept word indices
 #define SVM_INTERCEPT_WORD3   3
 #define SVM_INTERCEPT_WORD4   4
 
+// Intercept bits for word 3
+#define SVM_INTERCEPT_RDTSC   (1u << 1)
 #define SVM_INTERCEPT_CPUID   (1u << 18)
 #define SVM_INTERCEPT_HLT     (1u << 24)
 #define SVM_INTERCEPT_IOIO    (1u << 27)
 #define SVM_INTERCEPT_MSR     (1u << 28)
 
+// Intercept bits for word 4
+#define SVM_INTERCEPT_VMRUN   (1u << 0)
 #define SVM_INTERCEPT_VMMCALL (1u << 1)
+#define SVM_INTERCEPT_RDTSCP  (1u << 3)
 
+// NPT control
 #define SVM_NESTED_CTL_NP_ENABLE 0x1
-#define HV_STATUS_BASE                ((NTSTATUS)0xC0F00000)
+
+// Custom HV status codes
+#define HV_STATUS_BASE                ((NTSTATUS)0xC0F00000) 
 #define HV_STATUS_ALLOC_VCPU          (HV_STATUS_BASE + 0x01)
 #define HV_STATUS_ALLOC_HOSTSAVE      (HV_STATUS_BASE + 0x02)
 #define HV_STATUS_ALLOC_VMCB          (HV_STATUS_BASE + 0x03)
@@ -36,7 +50,7 @@
 #define HV_STATUS_IS_RESOURCE(s) \
     ((s) == STATUS_INSUFFICIENT_RESOURCES || (((s) & 0xFFFF0000) == HV_STATUS_BASE))
 
-
+// MSR definitions
 #define MSR_EFER              0xC0000080
 #define EFER_SVME             (1ULL << 12)
 
@@ -45,11 +59,7 @@
 
 #define MSR_VM_HSAVE_PA       0xC0010117
 
-//
-// ÂÀÆÍÎ: ñòðóêòóðà çäåñü ÍÅ ÎÁÚßÂËßÅÒÑß!
-// Ìû äåëàåì òîëüêî forward declaration
-//
-
+// Forward declaration
 struct _VCPU;
 
 NTSTATUS SvmInit(struct _VCPU** Out);

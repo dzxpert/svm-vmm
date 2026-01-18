@@ -13,7 +13,7 @@
 
 static VOID HvPrimeCloaking(VCPU* V)
 {
-    VMCB_CONTROL_AREA* c = VmcbControl(V->Vmcb);
+    VMCB_CONTROL_AREA* c = VmcbControl(&V->GuestVmcb);
 
    
     V->CloakedTscOffset = (__rdtsc() ^ 0xC0FFEEULL);
@@ -33,7 +33,7 @@ static VOID HvPrimeHardwareEntry(VCPU* V)
 
 VOID HvActivateLayeredPipeline(VCPU* V)
 {
-    if (!V || !V->Vmcb)
+    if (!V)
         return;
 
     HvPrimeCloaking(V);
@@ -60,10 +60,10 @@ BOOLEAN HvHandleLayeredNpf(VCPU* V, UINT64 faultGpa)
 
 VOID HvRefreshExecLayer(VCPU* V, UINT64 exitCode)
 {
-    if (!V || !V->Vmcb)
+    if (!V)
         return;
 
-    VMCB_CONTROL_AREA* c = VmcbControl(V->Vmcb);
+    VMCB_CONTROL_AREA* c = VmcbControl(&V->GuestVmcb);
 
     V->Exec.ExitCount++;
     V->Exec.LastExitCode = exitCode;

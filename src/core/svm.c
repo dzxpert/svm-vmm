@@ -5,33 +5,35 @@
 #include "vmcb.h"
 #include "npt.h"
 #include "layers.h"
+#include "vcpu.h"
 
 #ifndef PAGE_SIZE
 #define PAGE_SIZE 0x1000
 #endif
 
-extern VOID VmrunAsm(PVOID GuestRegs, UINT64 VmcbPa);
-extern VOID GuestEntry();
+// Assembly function - never returns to caller
+extern VOID LaunchVm(PVOID HostRsp);
 
 #define MSRPM_SIZE      0x6000
 #define IOPM_SIZE       0x2000
-#define MSR_NESTED_CR3  0xC0010111
 #define MSR_VM_HSAVE    0xC0010117
 
-
-
-
-
-typedef struct _DESCRIPTOR_TABLE {
+typedef struct _DESCRIPTOR_TABLE_REG {
     USHORT Limit;
     ULONG64 Base;
-} DESCRIPTOR_TABLE;
+} DESCRIPTOR_TABLE_REG;
 
+#include <pshpack1.h>
+typedef struct _DESCRIPTOR_TABLE_REG_PACKED {
+    UINT16 Limit;
+    ULONG_PTR Base;
+} DESCRIPTOR_TABLE_REG_PACKED;
+#include <poppack.h>
 
-
-
-
-static NTSTATUS SvmCheckSupport()
+//
+// Check if AMD SVM is supported
+//
+static NTSTATUS SvmCheckSupport(VOID)
 {
     int info[4];
 
@@ -39,9 +41,10 @@ static NTSTATUS SvmCheckSupport()
     if (!(info[2] & (1 << 2)))
         return STATUS_NOT_SUPPORTED;
 
-    __cpuid(info, 1);
-    if (info[2] & (1 << 31))
-        return STATUS_HV_FEATURE_UNAVAILABLE;
+    // Disabled for nested virtualization testing in VM
+    //__cpuid(info, 1);
+    //if (info[2] & (1 << 31))
+    //    return STATUS_HV_FEATURE_UNAVAILABLE;
 
     if (MsrRead(MSR_VM_CR) & VM_CR_SVMDIS)
         return STATUS_NOT_SUPPORTED;
@@ -49,17 +52,19 @@ static NTSTATUS SvmCheckSupport()
     return STATUS_SUCCESS;
 }
 
-
-
-static VOID SvmEnable()
+//
+// Enable SVM in EFER MSR
+//
+static VOID SvmEnable(VOID)
 {
     UINT64 efer = MsrRead(MSR_EFER);
     if (!(efer & EFER_SVME))
         MsrWrite(MSR_EFER, efer | EFER_SVME);
 }
 
-
-
+//
+// Allocate page-aligned contiguous memory
+//
 static PVOID AllocAligned(SIZE_T size, PHYSICAL_ADDRESS* pa)
 {
     PHYSICAL_ADDRESS low = { 0 };
@@ -74,180 +79,266 @@ static PVOID AllocAligned(SIZE_T size, PHYSICAL_ADDRESS* pa)
     }
 
     RtlZeroMemory(mem, size);
-    *pa = MmGetPhysicalAddress(mem);
+    if (pa)
+        *pa = MmGetPhysicalAddress(mem);
     return mem;
 }
 
-
-static NTSTATUS AllocHostSave(VCPU* V)
+//
+// Get segment access rights from GDT
+//
+static UINT16 GetSegmentAccessRights(UINT16 SegmentSelector, ULONG_PTR GdtBase)
 {
-    V->HostSave = AllocAligned(PAGE_SIZE, &V->HostSavePa);
-    if (!V->HostSave) return STATUS_INSUFFICIENT_RESOURCES;
+    typedef struct _SEGMENT_DESCRIPTOR {
+        UINT16 LimitLow;
+        UINT16 BaseLow;
+        UINT8 BaseMiddle;
+        UINT8 Type : 4;
+        UINT8 System : 1;
+        UINT8 Dpl : 2;
+        UINT8 Present : 1;
+        UINT8 LimitHigh : 4;
+        UINT8 Avl : 1;
+        UINT8 LongMode : 1;
+        UINT8 DefaultBit : 1;
+        UINT8 Granularity : 1;
+        UINT8 BaseHigh;
+    } SEGMENT_DESCRIPTOR, *PSEGMENT_DESCRIPTOR;
 
-    MsrWrite(MSR_VM_HSAVE, V->HostSavePa.QuadPart);
-    return STATUS_SUCCESS;
+    PSEGMENT_DESCRIPTOR desc = (PSEGMENT_DESCRIPTOR)(GdtBase + (SegmentSelector & ~0x7));
+    
+    UINT16 attr = 0;
+    attr |= (desc->Type & 0xF);
+    attr |= (desc->System & 0x1) << 4;
+    attr |= (desc->Dpl & 0x3) << 5;
+    attr |= (desc->Present & 0x1) << 7;
+    attr |= (desc->Avl & 0x1) << 8;
+    attr |= (desc->LongMode & 0x1) << 9;
+    attr |= (desc->DefaultBit & 0x1) << 10;
+    attr |= (desc->Granularity & 0x1) << 11;
+    
+    return attr;
 }
 
-static NTSTATUS AllocVmcb(VCPU* V)
-{
-    V->Vmcb = AllocAligned(PAGE_SIZE, &V->VmcbPa);
-    return V->Vmcb ? STATUS_SUCCESS : STATUS_INSUFFICIENT_RESOURCES;
-}
-
-static NTSTATUS AllocGuestStack(VCPU* V)
-{
-    V->GuestStackSize = PAGE_SIZE;
-    V->GuestStack = ExAllocatePoolWithTag(NonPagedPoolNx, PAGE_SIZE, 'GSTK');
-    if (!V->GuestStack) return STATUS_INSUFFICIENT_RESOURCES;
-
-    RtlZeroMemory(V->GuestStack, PAGE_SIZE);
-    return STATUS_SUCCESS;
-}
-
+//
+// Allocate MSRPM
+//
 static NTSTATUS AllocMsrpm(VCPU* V)
 {
-    V->Msrpm = AllocAligned(0x6000, &V->MsrpmPa);
+    V->Msrpm = AllocAligned(MSRPM_SIZE, &V->MsrpmPa);
     return V->Msrpm ? STATUS_SUCCESS : STATUS_INSUFFICIENT_RESOURCES;
 }
 
+//
+// Allocate IOPM
+//
 static NTSTATUS AllocIopm(VCPU* V)
 {
-    V->Iopm = AllocAligned(0x2000, &V->IopmPa);
+    V->Iopm = AllocAligned(IOPM_SIZE, &V->IopmPa);
     return V->Iopm ? STATUS_SUCCESS : STATUS_INSUFFICIENT_RESOURCES;
 }
 
-
-
-
-static VOID SetupGuest(VCPU* V)
+//
+// Setup VMCB for guest using the captured context
+//
+static VOID SetupVmcbFromContext(VCPU* V, PCONTEXT Ctx)
 {
-    VMCB_STATE_SAVE_AREA* s = VmcbState(V->Vmcb);
-
-    RtlZeroMemory(s, sizeof(*s));
-
-    s->Rip = (UINT64)GuestEntry;
-    s->Rsp = (UINT64)V->GuestStack + V->GuestStackSize - 0x20;
-    s->Rflags = 0x2;
-
-    s->Cs.Selector = 0x10;
-    s->Cs.Attributes = 0xA09B;
-    s->Cs.Limit = 0xFFFFFFFF;
-    s->Cs.Base = 0;
-
-    s->Ss.Selector = 0x18;
-    s->Ss.Attributes = 0xC093;
-    s->Ss.Limit = 0xFFFFFFFF;
-    s->Ss.Base = 0;
-
-    s->Ds.Selector = 0x18;
-    s->Ds.Attributes = 0xC093;
-    s->Ds.Limit = 0xFFFFFFFF;
-    s->Ds.Base = 0;
-
-    s->Es.Selector = 0x18;
-    s->Es.Attributes = 0xC093;
-    s->Es.Limit = 0xFFFFFFFF;
-    s->Es.Base = 0;
-
-    s->Gdtr.Base = 0;
-    s->Gdtr.Limit = 0;
-    s->Idtr.Base = 0;
-    s->Idtr.Limit = 0;
-
-    s->Cr0 = __readcr0() | 0x80000001ULL;
-    s->Cr4 = __readcr4();
-    s->Cr3 = __readcr3();
+    VMCB_STATE_SAVE_AREA* s = VmcbState(&V->GuestVmcb);
+    VMCB_CONTROL_AREA* c = VmcbControl(&V->GuestVmcb);
+    
+    // Must use packed structure for SGDT/SIDT (exactly 10 bytes)
+    DESCRIPTOR_TABLE_REG_PACKED gdtr, idtr;
+    _sgdt(&gdtr);
+    __sidt(&idtr);
+    
+    // Zero out VMCB
+    RtlZeroMemory(&V->GuestVmcb, sizeof(V->GuestVmcb));
+    
+    // Setup control area
+    c->GuestAsid = 1;
+    c->VmcbClean = 0;
+    
+    // Intercepts - use Intercepts array
+    // Word 3: CPUID (bit 18), optionally RDTSC (bit 1) for timing attack mitigation
+    c->Intercepts[3] = SVM_INTERCEPT_CPUID;
+    
+    // Word 4: VMRUN (bit 0), VMMCALL (bit 1), optionally RDTSCP (bit 3)
+    c->Intercepts[4] = SVM_INTERCEPT_VMRUN | SVM_INTERCEPT_VMMCALL;
+    
+    // RDTSC/RDTSCP interception DISABLED by default
+    // WARNING: Enabling causes VM freeze due to extremely high VMEXIT frequency
+    // Windows calls RDTSC thousands of times per second
+    // TODO: Implement smarter timing hiding (TSC scaling, selective interception)
+    // c->Intercepts[3] |= SVM_INTERCEPT_RDTSC;
+    // c->Intercepts[4] |= SVM_INTERCEPT_RDTSCP;
+    
+    c->MsrpmBasePa = V->MsrpmPa.QuadPart;
+    c->IopmBasePa = V->IopmPa.QuadPart;
+    // Enable NPT (Nested Page Tables) for memory virtualization
+    // This enables hardware-assisted address translation: GVA -> GPA -> HPA
+    // NPT tables are identity-mapped (GPA == HPA) by NptInitialize()
+    c->NestedControl = SVM_NESTED_CTL_NP_ENABLE;
+    c->NestedCr3 = V->Npt.Pml4Pa.QuadPart;
+    
+    // TSC offset - used to compensate for VMEXIT overhead
+    c->TscOffset = V->CloakedTscOffset;
+    
+    // Flush entire TLB on first VMRUN to prevent stale entries
+    // This is critical for bare metal where TLB may have garbage
+    c->TlbControl = 1;  // 1 = Flush all TLB on next VMRUN
+    
+    // Setup state save area from captured context
+    s->Gdtr.Base = gdtr.Base;
+    s->Gdtr.Limit = gdtr.Limit;
+    s->Idtr.Base = idtr.Base;
+    s->Idtr.Limit = idtr.Limit;
+    
+    s->Cs.Limit = (UINT32)__segmentlimit(Ctx->SegCs);
+    s->Ds.Limit = (UINT32)__segmentlimit(Ctx->SegDs);
+    s->Es.Limit = (UINT32)__segmentlimit(Ctx->SegEs);
+    s->Ss.Limit = (UINT32)__segmentlimit(Ctx->SegSs);
+    
+    s->Cs.Selector = Ctx->SegCs;
+    s->Ds.Selector = Ctx->SegDs;
+    s->Es.Selector = Ctx->SegEs;
+    s->Ss.Selector = Ctx->SegSs;
+    
+    s->Cs.Attributes = GetSegmentAccessRights(Ctx->SegCs, gdtr.Base);
+    s->Ds.Attributes = GetSegmentAccessRights(Ctx->SegDs, gdtr.Base);
+    s->Es.Attributes = GetSegmentAccessRights(Ctx->SegEs, gdtr.Base);
+    s->Ss.Attributes = GetSegmentAccessRights(Ctx->SegSs, gdtr.Base);
+    
+    // ========== CRITICAL FIX: Add missing segments (FS, GS, TR, LDTR) ==========
+    // Missing GS segment = crash on bare metal because Windows kernel uses GS for KPCR
+    
+    // FS segment (TEB in user mode, rarely used in kernel mode for x64)
+    s->Fs.Selector = Ctx->SegFs;
+    s->Fs.Limit = (UINT32)__segmentlimit(Ctx->SegFs);
+    s->Fs.Attributes = GetSegmentAccessRights(Ctx->SegFs, gdtr.Base);
+    s->Fs.Base = __readmsr(MSR_FS_BASE);
+    
+    // GS segment (KPCR in kernel mode - CRITICAL for Windows kernel operation)
+    s->Gs.Selector = Ctx->SegGs;
+    s->Gs.Limit = (UINT32)__segmentlimit(Ctx->SegGs);
+    s->Gs.Attributes = GetSegmentAccessRights(Ctx->SegGs, gdtr.Base);
+    s->Gs.Base = __readmsr(MSR_GS_BASE);
+    
+    // TR (Task Register) - required for TSS, affects interrupt handling
+    {
+        // External assembly function (x64 doesn't support inline asm)
+        extern UINT16 ReadTr(VOID);
+        UINT16 trSelector = ReadTr();
+        
+        s->Tr.Selector = trSelector;
+        s->Tr.Limit = (UINT32)__segmentlimit(trSelector);
+        s->Tr.Attributes = GetSegmentAccessRights(trSelector, gdtr.Base);
+        
+        // Get TR base from GDT (TSS is a system descriptor, need full base)
+        typedef struct _SYSTEM_SEGMENT_DESCRIPTOR {
+            UINT16 LimitLow;
+            UINT16 BaseLow;
+            UINT8 BaseMiddle;
+            UINT8 Type : 4;
+            UINT8 System : 1;
+            UINT8 Dpl : 2;
+            UINT8 Present : 1;
+            UINT8 LimitHigh : 4;
+            UINT8 Avl : 1;
+            UINT8 Reserved1 : 2;
+            UINT8 Granularity : 1;
+            UINT8 BaseHigh;
+            UINT32 BaseUpper;
+            UINT32 Reserved2;
+        } SYSTEM_SEGMENT_DESCRIPTOR;
+        
+        SYSTEM_SEGMENT_DESCRIPTOR* tssDesc = (SYSTEM_SEGMENT_DESCRIPTOR*)(gdtr.Base + (trSelector & ~0x7));
+        s->Tr.Base = (UINT64)tssDesc->BaseLow | 
+                     ((UINT64)tssDesc->BaseMiddle << 16) | 
+                     ((UINT64)tssDesc->BaseHigh << 24) |
+                     ((UINT64)tssDesc->BaseUpper << 32);
+    }
+    
+    // LDTR (Local Descriptor Table Register) - usually 0 in modern Windows
+    {
+        // External assembly function (x64 doesn't support inline asm)
+        extern UINT16 ReadLdtr(VOID);
+        UINT16 ldtrSelector = ReadLdtr();
+        
+        s->Ldtr.Selector = ldtrSelector;
+        if (ldtrSelector != 0)
+        {
+            s->Ldtr.Limit = (UINT32)__segmentlimit(ldtrSelector);
+            s->Ldtr.Attributes = GetSegmentAccessRights(ldtrSelector, gdtr.Base);
+        }
+        else
+        {
+            // Null LDTR - common in x64 Windows
+            s->Ldtr.Limit = 0;
+            s->Ldtr.Attributes = 0;
+            s->Ldtr.Base = 0;
+        }
+    }
+    // ========== END OF SEGMENT FIX ==========
+    
     s->Efer = MsrRead(MSR_EFER);
-
+    s->Cr0 = __readcr0();
+    s->Cr2 = __readcr2();
+    s->Cr3 = __readcr3();
+    s->Cr4 = __readcr4();
+    s->Rflags = Ctx->EFlags;
+    s->Rsp = Ctx->Rsp;
+    s->Rip = Ctx->Rip;
+    s->Rax = Ctx->Rax;
+    s->Pat = MsrRead(0x277);  // IA32_MSR_PAT
+    
+    // Update shadow CR3 for NPT
     NptUpdateShadowCr3(&V->Npt, s->Cr3);
 }
 
-
-
-
-
-static VOID SetupControls(VCPU* V)
-{
-    VMCB_CONTROL_AREA* c = VmcbControl(V->Vmcb);
-
-    RtlZeroMemory(c, sizeof(*c));
-
-    c->GuestAsid = 1;
-    c->VmcbClean = 0;
-
-    c->Intercepts[SVM_INTERCEPT_WORD3] =
-        SVM_INTERCEPT_CPUID |
-        SVM_INTERCEPT_HLT;
-
-    c->Intercepts[SVM_INTERCEPT_WORD4] = SVM_INTERCEPT_VMMCALL;
-
-    c->MsrpmBasePa = V->MsrpmPa.QuadPart;
-    c->IopmBasePa = V->IopmPa.QuadPart;
-
-    c->NestedControl = SVM_NESTED_CTL_NP_ENABLE;
-    c->NestedCr3 = V->Npt.Pml4Pa.QuadPart;
-
-   
-    c->TscOffset = V->CloakedTscOffset;
-}
-
-
-
-
-
+//
+// Initialize a VCPU structure
+//
 NTSTATUS SvmInit(VCPU** Out)
 {
     NTSTATUS st = SvmCheckSupport();
-    if (!NT_SUCCESS(st)) return st;
+    if (!NT_SUCCESS(st)) 
+        return st;
 
-    SvmEnable();
-
-    VCPU* V = ExAllocatePoolWithTag(NonPagedPoolNx, sizeof(VCPU), 'VCPU');
+    // Allocate VCPU with page alignment (it contains page-aligned VMCBs)
+    PHYSICAL_ADDRESS low = { 0 };
+    PHYSICAL_ADDRESS high = { .QuadPart = ~0ULL };
+    PHYSICAL_ADDRESS skip = { 0 };
+    
+    VCPU* V = MmAllocateContiguousMemorySpecifyCache(sizeof(VCPU), low, high, skip, MmCached);
     if (!V)
         return HV_STATUS_ALLOC_VCPU;
 
     RtlZeroMemory(V, sizeof(*V));
+    
+    DbgPrint("SVM-HV: VCPU allocated at %p, size=0x%llX\n", V, (UINT64)sizeof(VCPU));
 
-    if (!NT_SUCCESS(st = AllocHostSave(V)))
-    {
-        DbgPrint("SVM-HV: AllocHostSave failed: 0x%X\n", st);
-        st = HV_STATUS_ALLOC_HOSTSAVE;
-        goto fail;
-    }
-    if (!NT_SUCCESS(st = AllocVmcb(V)))
-    {
-        DbgPrint("SVM-HV: AllocVmcb failed: 0x%X\n", st);
-        st = HV_STATUS_ALLOC_VMCB;
-        goto fail;
-    }
-    if (!NT_SUCCESS(st = AllocGuestStack(V)))
-    {
-        DbgPrint("SVM-HV: AllocGuestStack failed: 0x%X\n", st);
-        st = HV_STATUS_ALLOC_GUEST_STACK;
-        goto fail;
-    }
+    // Allocate MSRPM
     if (!NT_SUCCESS(st = AllocMsrpm(V)))
     {
         DbgPrint("SVM-HV: AllocMsrpm failed: 0x%X\n", st);
         st = HV_STATUS_ALLOC_MSRPM;
         goto fail;
     }
+    
+    // Allocate IOPM
     if (!NT_SUCCESS(st = AllocIopm(V)))
     {
         DbgPrint("SVM-HV: AllocIopm failed: 0x%X\n", st);
         st = HV_STATUS_ALLOC_IOPM;
         goto fail;
     }
+    
+    // Initialize NPT
     if (!NT_SUCCESS(st = NptInitialize(&V->Npt)))
     {
         DbgPrint("SVM-HV: NptInitialize failed: 0x%X\n", st);
         goto fail;
     }
-
-    SetupGuest(V);
-    SetupControls(V);
-
-    HvActivateLayeredPipeline(V);
 
     *Out = V;
     return STATUS_SUCCESS;
@@ -257,32 +348,95 @@ fail:
     return st;
 }
 
-
-
+//
+// Launch the hypervisor on the current CPU
+// Uses RtlCaptureContext trick to "return" from the infinite VMRUN loop
+//
 NTSTATUS SvmLaunch(VCPU* V)
 {
-    __try {
-        VmrunAsm(&V->GuestRegs, V->VmcbPa.QuadPart);
+    ULONG cpuIndex = KeGetCurrentProcessorNumber();
+    
+    DbgPrint("SVM-HV: [CPU %lu] Starting virtualization...\n", cpuIndex);
+    
+    // Enable SVM on this CPU
+    SvmEnable();
+    
+    // Allocate context on stack
+    CONTEXT ctx;
+    RtlCaptureContext(&ctx);
+    
+    // Check if we've "returned" from virtualization
+    // After LaunchVm, the guest will eventually execute this code
+    // with Rax == MAXUINT64, signaling successful virtualization
+    if (ctx.Rax == MAXUINT64)
+    {
+        DbgPrint("SVM-HV: [CPU %lu] Virtualization successful!\n", cpuIndex);
+        V->Active = TRUE;
+        return STATUS_SUCCESS;
     }
-    __except (EXCEPTION_EXECUTE_HANDLER) {
-        return GetExceptionCode();
-    }
-
-    return HypervisorHandleExit(V);
+    
+    DbgPrint("SVM-HV: [CPU %lu] Preparing VMCB...\n", cpuIndex);
+    
+    // Setup the VMCB from the captured context
+    SetupVmcbFromContext(V, &ctx);
+    
+    // Get physical addresses
+    PHYSICAL_ADDRESS guestVmcbPa = MmGetPhysicalAddress(&V->GuestVmcb);
+    PHYSICAL_ADDRESS hostVmcbPa = MmGetPhysicalAddress(&V->HostVmcb);
+    PHYSICAL_ADDRESS hostStateAreaPa = MmGetPhysicalAddress(&V->HostStateArea);
+    
+    // Setup host stack layout (at top of host stack)
+    V->HostStackLayout.GuestVmcbPa = guestVmcbPa.QuadPart;
+    V->HostStackLayout.HostVmcbPa = hostVmcbPa.QuadPart;
+    V->HostStackLayout.Self = V;
+    V->HostStackLayout.ProcessorIndex = cpuIndex;
+    V->HostStackLayout.Reserved1 = MAXUINT64;
+    
+    // Save guest VMCB state
+    __svm_vmsave(guestVmcbPa.QuadPart);
+    
+    // Set host save area
+    __writemsr(MSR_VM_HSAVE, hostStateAreaPa.QuadPart);
+    
+    // Save host VMCB state
+    __svm_vmsave(hostVmcbPa.QuadPart);
+    
+    // CRITICAL FIX: The check `if (ctx.Rax == MAXUINT64)` reads from the 
+    // CONTEXT structure in MEMORY, not from the RAX register!
+    // We must set BOTH:
+    // 1. ctx.Rax in memory - so the if check passes
+    // 2. VMCB's Rax - so the guest register is correct
+    ctx.Rax = MAXUINT64;
+    VmcbState(&V->GuestVmcb)->Rax = MAXUINT64;
+    
+    // Disable the layered pipeline for now (debugging)
+    // HvActivateLayeredPipeline(V);
+    
+    DbgPrint("SVM-HV: [CPU %lu] Launching VM (this should not return)...\n", cpuIndex);
+    
+    // Launch the VM - this NEVER returns to here!
+    // Instead, the guest will execute the RtlCaptureContext code above
+    // with Rax = MAXUINT64
+    LaunchVm(&V->HostStackLayout.GuestVmcbPa);
+    
+    // If we get here, something went wrong
+    DbgPrint("SVM-HV: [CPU %lu] ERROR: LaunchVm returned unexpectedly!\n", cpuIndex);
+    return STATUS_UNSUCCESSFUL;
 }
 
-
-
+//
+// Shutdown and free VCPU resources
+//
 VOID SvmShutdown(VCPU* V)
 {
-    if (!V) return;
+    if (!V) 
+        return;
 
-    if (V->GuestStack) ExFreePoolWithTag(V->GuestStack, 'GSTK');
-    if (V->Vmcb) MmFreeContiguousMemory(V->Vmcb);
-    if (V->HostSave) MmFreeContiguousMemory(V->HostSave);
-    if (V->Msrpm) MmFreeContiguousMemory(V->Msrpm);
-    if (V->Iopm) MmFreeContiguousMemory(V->Iopm);
+    if (V->Msrpm) 
+        MmFreeContiguousMemory(V->Msrpm);
+    if (V->Iopm) 
+        MmFreeContiguousMemory(V->Iopm);
 
     NptDestroy(&V->Npt);
-    ExFreePoolWithTag(V, 'VCPU');
+    MmFreeContiguousMemory(V);
 }

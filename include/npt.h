@@ -61,10 +61,20 @@ typedef struct _NPT_STATE
         UINT64 NewHpaPage;
         BOOLEAN Active;
     } ShadowHook;
+    
+    // Flag to track when TLB flush is needed after hook operations
+    BOOLEAN TlbFlushPending;
+    
+    // 1GB page PDPT entries (for simple identity mapping)
+    // This provides full address space coverage without per-page allocation
+    NPT_ENTRY* PdptEntries;
+    PHYSICAL_ADDRESS PdptEntriesPa;
 } NPT_STATE;
 
+VOID NptGlobalInit(VOID);
 NTSTATUS NptInitialize(NPT_STATE* State);
 VOID NptDestroy(NPT_STATE* State);
+PVOID NptLookupTable(UINT64 pa);
 
 PHYSICAL_ADDRESS NptTranslateGvaToHpa(NPT_STATE* State, UINT64 Gva);
 PHYSICAL_ADDRESS NptTranslateGpaToHpa(NPT_STATE* State, UINT64 Gpa);

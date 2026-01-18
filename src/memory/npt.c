@@ -6,6 +6,83 @@
 #define PAGE_ALIGN(x) ((x) & ~0xFFFULL)
 #endif
 
+// PA->VA lookup table since MmGetVirtualForPhysical doesn't work with pool memory
+#define MAX_NPT_TABLES 2048  // Increased for 16+ core support (~35 tables per core)
+static struct {
+    UINT64 pa;
+    PVOID va;
+} g_NptTableMap[MAX_NPT_TABLES];
+static ULONG g_NptTableCount = 0;
+static KSPIN_LOCK g_NptTableLock;
+static BOOLEAN g_NptTableLockInitialized = FALSE;
+
+static VOID NptInitTableLock(VOID)
+{
+    if (!g_NptTableLockInitialized)
+    {
+        KeInitializeSpinLock(&g_NptTableLock);
+        g_NptTableLockInitialized = TRUE;
+    }
+}
+
+//
+// Call this ONCE from DriverEntry before any SmpInitialize
+//
+VOID NptGlobalInit(VOID)
+{
+    if (!g_NptTableLockInitialized)
+    {
+        KeInitializeSpinLock(&g_NptTableLock);
+        g_NptTableLockInitialized = TRUE;
+        g_NptTableCount = 0;
+        RtlZeroMemory(g_NptTableMap, sizeof(g_NptTableMap));
+        DbgPrint("SVM-HV: NPT global state initialized\n");
+    }
+}
+
+
+static VOID NptRegisterTable(UINT64 pa, PVOID va)
+{
+    KIRQL oldIrql;
+    
+    NptInitTableLock();
+    KeAcquireSpinLock(&g_NptTableLock, &oldIrql);
+    
+    if (g_NptTableCount < MAX_NPT_TABLES)
+    {
+        g_NptTableMap[g_NptTableCount].pa = pa;
+        g_NptTableMap[g_NptTableCount].va = va;
+        g_NptTableCount++;
+    }
+    else
+    {
+        DbgPrint("SVM-HV: WARNING - NPT table map full!\n");
+    }
+    
+    KeReleaseSpinLock(&g_NptTableLock, oldIrql);
+}
+
+PVOID NptLookupTable(UINT64 pa)
+{
+    KIRQL oldIrql;
+    PVOID result = NULL;
+    
+    NptInitTableLock();
+    KeAcquireSpinLock(&g_NptTableLock, &oldIrql);
+    
+    for (ULONG i = 0; i < g_NptTableCount; i++)
+    {
+        if (g_NptTableMap[i].pa == pa)
+        {
+            result = g_NptTableMap[i].va;
+            break;
+        }
+    }
+    
+    KeReleaseSpinLock(&g_NptTableLock, oldIrql);
+    return result;
+}
+
 static NPT_ENTRY* NptAllocTable(PHYSICAL_ADDRESS* outPa)
 {
     PHYSICAL_ADDRESS low = { 0 };
@@ -13,21 +90,75 @@ static NPT_ENTRY* NptAllocTable(PHYSICAL_ADDRESS* outPa)
     PHYSICAL_ADDRESS skip = { 0 };
 
     NPT_ENTRY* tbl = MmAllocateContiguousMemorySpecifyCache(PAGE_SIZE, low, high, skip, MmCached);
+    
     if (!tbl)
-        return NULL;
+    {
+        tbl = (NPT_ENTRY*)ExAllocatePoolWithTag(NonPagedPoolNx, PAGE_SIZE, 'NPTB');
+        if (!tbl)
+        {
+            DbgPrint("SVM-HV: CRITICAL - NPT table allocation failed!\n");
+            return NULL;
+        }
+    }
 
     RtlZeroMemory(tbl, PAGE_SIZE);
     *outPa = MmGetPhysicalAddress(tbl);
+    
+    // Fix #4: Validate physical address
+    if (outPa->QuadPart == 0 || outPa->QuadPart == ~0ULL)
+    {
+        DbgPrint("SVM-HV: CRITICAL - Invalid physical address 0x%llX for NPT table!\n", 
+                 outPa->QuadPart);
+        
+        // Try to free the memory
+        __try {
+            MmFreeContiguousMemory(tbl);
+        } __except(EXCEPTION_EXECUTE_HANDLER) {
+            ExFreePoolWithTag(tbl, 'NPTB');
+        }
+        
+        return NULL;
+    }
+    
+    NptRegisterTable(outPa->QuadPart, tbl);
+    
+    // DbgPrint("SVM-HV: NPT table allocated - VA=%p PA=0x%llX\n", tbl, outPa->QuadPart);  // Commented to reduce noise
     return tbl;
 }
 
 static NPT_ENTRY* NptResolveTableFromEntry(NPT_ENTRY* entry)
 {
-    return (NPT_ENTRY*)MmGetVirtualForPhysical((PHYSICAL_ADDRESS){ entry->PageFrame << 12 });
+    if (!entry || !entry->Present)
+        return NULL;
+        
+    UINT64 pa = (UINT64)entry->PageFrame << 12;
+    if (pa == 0)
+        return NULL;
+        
+    PVOID va = NptLookupTable(pa);
+    if (!va)
+    {
+        DbgPrint("SVM-HV: NptResolveTableFromEntry - lookup failed for PA 0x%llX\n", pa);
+    }
+    return (NPT_ENTRY*)va;
 }
 
 static NPT_ENTRY* NptEnsureSubtable(NPT_ENTRY* parent, UINT64 index)
 {
+    // Validate parent pointer before access
+    if (!parent)
+    {
+        DbgPrint("SVM-HV: NptEnsureSubtable - NULL parent!\n");
+        return NULL;
+    }
+    
+    // Check if address is valid before dereferencing
+    if (!MmIsAddressValid(parent))
+    {
+        DbgPrint("SVM-HV: NptEnsureSubtable - invalid parent address %p\n", parent);
+        return NULL;
+    }
+    
     if (!parent[index].Present)
     {
         PHYSICAL_ADDRESS pa;
@@ -37,6 +168,7 @@ static NPT_ENTRY* NptEnsureSubtable(NPT_ENTRY* parent, UINT64 index)
 
         parent[index].Present = 1;
         parent[index].Write = 1;
+        parent[index].User = 1;  // Required for NPT - allows supervisor mode access
         parent[index].PageFrame = pa.QuadPart >> 12;
     }
 
@@ -60,10 +192,9 @@ static NPT_ENTRY* NptGetEntry(
     if (!pml4[pml4_i].Present)
         return NULL;
 
-    NPT_ENTRY* pdpt = (NPT_ENTRY*)MmGetVirtualForPhysical(
-        (PHYSICAL_ADDRESS) {
-        pml4[pml4_i].PageFrame << 12
-    });
+    NPT_ENTRY* pdpt = (NPT_ENTRY*)NptLookupTable(pml4[pml4_i].PageFrame << 12);
+    if (!pdpt)
+        return NULL;
 
     if (!pdpt[pdpt_i].Present)
         return NULL;
@@ -74,10 +205,9 @@ static NPT_ENTRY* NptGetEntry(
         return &pdpt[pdpt_i];
     }
 
-    NPT_ENTRY* pd = (NPT_ENTRY*)MmGetVirtualForPhysical(
-        (PHYSICAL_ADDRESS) {
-        pdpt[pdpt_i].PageFrame << 12
-    });
+    NPT_ENTRY* pd = (NPT_ENTRY*)NptLookupTable(pdpt[pdpt_i].PageFrame << 12);
+    if (!pd)
+        return NULL;
 
     if (!pd[pd_i].Present)
         return NULL;
@@ -88,10 +218,9 @@ static NPT_ENTRY* NptGetEntry(
         return &pd[pd_i];
     }
 
-    NPT_ENTRY* pt = (NPT_ENTRY*)MmGetVirtualForPhysical(
-        (PHYSICAL_ADDRESS) {
-        pd[pd_i].PageFrame << 12
-    });
+    NPT_ENTRY* pt = (NPT_ENTRY*)NptLookupTable(pd[pd_i].PageFrame << 12);
+    if (!pt)
+        return NULL;
 
     *outLevel = 3;
     return &pt[pt_i];
@@ -134,15 +263,11 @@ static VOID NptProtectPageForTrap(NPT_STATE* State, UINT64 gpa, NPT_ENTRY* entry
 
 PHYSICAL_ADDRESS NptTranslateGpaToHpa(NPT_STATE* State, UINT64 gpa)
 {
-    PHYSICAL_ADDRESS pa = { 0 };
-    UINT64 level;
-
-    NPT_ENTRY* entry = NptGetEntry(State, gpa, &level);
-    if (!entry)
-        return pa;
-
-    UINT64 offset = gpa & 0xFFFULL;
-    pa.QuadPart = (entry->PageFrame << 12) + offset;
+    // NPT is identity mapped (GPA == HPA)
+    // Hardware uses NPT tables during VMRUN, but for software translation
+    // we can return GPA directly since it equals HPA
+    PHYSICAL_ADDRESS pa;
+    pa.QuadPart = gpa;
     return pa;
 }
 
@@ -397,6 +522,13 @@ BOOLEAN NptInstallShadowHook(NPT_STATE* State, UINT64 TargetGpa, UINT64 NewHpa)
     State->ShadowHook.TargetGpaPage = TargetGpa & ~0xFFFULL;
     State->ShadowHook.NewHpaPage = NewHpa & ~0xFFFULL;
     State->ShadowHook.Active = TRUE;
+    
+    // Mark that TLB needs flushing on next VMRUN
+    // The VMCB TlbControl field will be set by the caller or VMEXIT handler
+    // NOTE: For proper multi-core support, an IPI should be sent to all cores
+    // to flush their TLBs. For now, we rely on the ASID/TLB control mechanism.
+    State->TlbFlushPending = TRUE;
+    
     return TRUE;
 }
 
@@ -408,6 +540,9 @@ VOID NptClearShadowHook(NPT_STATE* State)
     State->ShadowHook.Active = FALSE;
     State->ShadowHook.TargetGpaPage = 0;
     State->ShadowHook.NewHpaPage = 0;
+    
+    // Mark TLB flush needed to restore original mappings
+    State->TlbFlushPending = TRUE;
 }
 
 static UINT64 NptGetMaxPhysicalAddress()
@@ -435,20 +570,17 @@ NTSTATUS NptInitialize(NPT_STATE* State)
     if (!State) return STATUS_INVALID_PARAMETER;
     RtlZeroMemory(State, sizeof(*State));
 
-    
+    // Initialize spinlock for table map
+    NptInitTableLock();
+
+    // Allocate fake pages (for hardware trigger traps)
     for (ULONG i = 0; i < 2; i++)
     {
         State->FakePageVa[i] =
             MmAllocateContiguousMemorySpecifyCache(PAGE_SIZE,
-                (PHYSICAL_ADDRESS) {
-            0
-        },
-                (PHYSICAL_ADDRESS) {
-            .QuadPart = ~0ULL
-        },
-                (PHYSICAL_ADDRESS) {
-            0
-        }, MmCached);
+                (PHYSICAL_ADDRESS) { 0 },
+                (PHYSICAL_ADDRESS) { .QuadPart = ~0ULL },
+                (PHYSICAL_ADDRESS) { 0 }, MmCached);
 
         if (!State->FakePageVa[i])
         {
@@ -460,62 +592,90 @@ NTSTATUS NptInitialize(NPT_STATE* State)
         State->FakePagePa[i] = MmGetPhysicalAddress(State->FakePageVa[i]);
     }
 
+    // ==========================================================================
+    // SIMPLE 1GB PAGE IDENTITY MAPPING (like reference project)
+    // This covers the ENTIRE 512GB address space using 1GB huge pages
+    // No need for complex per-range mapping - just identity map everything
+    // ==========================================================================
     
-    PHYSICAL_ADDRESS pml4Pa;
-    NPT_ENTRY* pml4 = NptAllocTable(&pml4Pa);
+    DbgPrint("SVM-HV: Using 1GB huge page NPT for full identity mapping\n");
+    
+    // Allocate PML4 (512 entries)
+    PHYSICAL_ADDRESS low = { 0 };
+    PHYSICAL_ADDRESS high = { .QuadPart = ~0ULL };
+    PHYSICAL_ADDRESS skip = { 0 };
+    
+    NPT_ENTRY* pml4 = MmAllocateContiguousMemorySpecifyCache(
+        sizeof(NPT_ENTRY) * 512, low, high, skip, MmCached);
     if (!pml4)
     {
-        DbgPrint("SVM-HV: NPT PML4 alloc failed\n");
+        DbgPrint("SVM-HV: Failed to allocate PML4\n");
         return HV_STATUS_NPT_PML4;
     }
-
+    RtlZeroMemory(pml4, sizeof(NPT_ENTRY) * 512);
+    
     State->Pml4 = pml4;
-    State->Pml4Pa = pml4Pa;
-
-    UINT64 mapLimit = NptGetMaxPhysicalAddress();
-    if (!mapLimit)
-        return HV_STATUS_NPT_RANGES;
-
-    if (mapLimit < (1ULL << 32))
-        mapLimit = (1ULL << 32);
-
-    mapLimit = (mapLimit + 0x1FFFFFULL) & ~0x1FFFFFULL;
-    UINT64 pageCount = mapLimit / 0x200000ULL;
-
-    DbgPrint("SVM-HV: NPT map limit=0x%llx pages=%llu\n", mapLimit, pageCount);
-
-    for (UINT64 i = 0; i < pageCount; i++)
+    State->Pml4Pa = MmGetPhysicalAddress(pml4);
+    NptRegisterTable(State->Pml4Pa.QuadPart, pml4);
+    
+    // Allocate PDPT entries array (512 PML4 entries x 512 PDPT entries = 262144 entries)
+    // Each PDPT entry with LargePage=1 covers 1GB
+    // Total coverage = 512 * 512 * 1GB = 256TB (full x64 address space)
+    SIZE_T pdptSize = sizeof(NPT_ENTRY) * 512 * 512;
+    NPT_ENTRY* allPdpt = MmAllocateContiguousMemorySpecifyCache(
+        pdptSize, low, high, skip, MmCached);
+    if (!allPdpt)
     {
-        UINT64 phys = i * 0x200000ULL;
-
-        UINT64 pml4_i = (phys >> 39) & 0x1FF;
-        UINT64 pdpt_i = (phys >> 30) & 0x1FF;
-        UINT64 pd_i = (phys >> 21) & 0x1FF;
-
-        NPT_ENTRY* pdpt = NptEnsureSubtable(pml4, pml4_i);
-        if (!pdpt)
+        DbgPrint("SVM-HV: Failed to allocate PDPT array (%llu bytes)\n", (UINT64)pdptSize);
+        MmFreeContiguousMemory(pml4);
+        return HV_STATUS_NPT_PDPT;
+    }
+    RtlZeroMemory(allPdpt, pdptSize);
+    
+    State->PdptEntries = allPdpt;
+    State->PdptEntriesPa = MmGetPhysicalAddress(allPdpt);
+    
+    DbgPrint("SVM-HV: Allocated PML4 at %p (PA=0x%llX)\n", pml4, State->Pml4Pa.QuadPart);
+    DbgPrint("SVM-HV: Allocated PDPT array at %p (PA=0x%llX, size=0x%llX)\n", 
+             allPdpt, State->PdptEntriesPa.QuadPart, (UINT64)pdptSize);
+    
+    // Setup all 512 PML4 entries, each pointing to a block of 512 PDPT entries
+    for (ULONG64 pml4Index = 0; pml4Index < 512; pml4Index++)
+    {
+        // Each PML4 entry points to a contiguous set of 512 PDPT entries
+        NPT_ENTRY* thisPdpt = &allPdpt[pml4Index * 512];
+        PHYSICAL_ADDRESS pdptPa = MmGetPhysicalAddress(thisPdpt);
+        
+        pml4[pml4Index].Present = 1;
+        pml4[pml4Index].Write = 1;
+        pml4[pml4Index].User = 1;  // Supervisor bit for NPT
+        pml4[pml4Index].PageFrame = pdptPa.QuadPart >> 12;
+        
+        // NOTE: We intentionally do NOT call NptRegisterTable for each PDPT block
+        // since we have a contiguous allocation. The table map has limited size
+        // and would overflow with 512 entries per CPU * N CPUs.
+        
+        
+        // Setup all 512 PDPT entries as 1GB huge pages (identity mapped)
+        for (ULONG64 pdpIndex = 0; pdpIndex < 512; pdpIndex++)
         {
-            DbgPrint("SVM-HV: NPT PDPT alloc failed (pml4=%llu)\n", pml4_i);
-            return HV_STATUS_NPT_PDPT;
-        }
-
-        NPT_ENTRY* pd = NptEnsureSubtable(pdpt, pdpt_i);
-        if (!pd)
-        {
-            DbgPrint("SVM-HV: NPT PD alloc failed (pml4=%llu pdpt=%llu)\n", pml4_i, pdpt_i);
-            return HV_STATUS_NPT_PD;
-        }
-
-        NPT_ENTRY* pde = &pd[pd_i];
-        if (!pde->Present)
-        {
-            pde->Present = 1;
-            pde->Write = 1;
-            pde->LargePage = 1;
-            pde->PageFrame = phys >> 12;
+            // Physical address this 1GB page maps to:
+            // Page index = pml4Index * 512 + pdpIndex
+            // Physical address = pageIndex * 1GB = pageIndex * 0x40000000
+            // PageFrame field = physAddr >> 12 = pageIndex << 18
+            UINT64 pageIndex = pml4Index * 512ULL + pdpIndex;
+            
+            thisPdpt[pdpIndex].Present = 1;
+            thisPdpt[pdpIndex].Write = 1;
+            thisPdpt[pdpIndex].User = 1;       // Supervisor for NPT
+            thisPdpt[pdpIndex].LargePage = 1;  // 1GB huge page!
+            thisPdpt[pdpIndex].PageFrame = pageIndex << 18;  // Correct: physAddr >> 12
         }
     }
-
+    
+    DbgPrint("SVM-HV: Identity mapped 256TB using 1GB pages (512 PML4 x 512 PDPT)\n");
+    DbgPrint("SVM-HV: NPT initialization complete\n");
+    
     return STATUS_SUCCESS;
 }
 
@@ -541,7 +701,7 @@ VOID NptDestroy(NPT_STATE* State)
                 continue;
 
             NPT_ENTRY* pdpt = NptResolveTableFromEntry(&State->Pml4[pml4_i]);
-            if (!pdpt)
+            if (!pdpt || !MmIsAddressValid(pdpt))
                 continue;
 
             for (UINT64 pdpt_i = 0; pdpt_i < 512; pdpt_i++)
@@ -550,7 +710,7 @@ VOID NptDestroy(NPT_STATE* State)
                     continue;
 
                 NPT_ENTRY* pd = NptResolveTableFromEntry(&pdpt[pdpt_i]);
-                if (pd)
+                if (pd && MmIsAddressValid(pd))
                     MmFreeContiguousMemory(pd);
             }
 

@@ -1,6 +1,8 @@
 #include <ntifs.h>
 #include "smp.h"
 #include "svm.h"
+#include "vmcb.h"
+#include "vcpu.h"
 
 #define SMP_VCPU_TAG 'VmsP'
 #define SMP_PNUM_TAG 'NmsP'
@@ -76,7 +78,7 @@ NTSTATUS SmpInitialize(SMP_STATE* State, ULONG MaxVcpus)
         NTSTATUS st = SvmInit(&State->Vcpus[i]);
         if (NT_SUCCESS(st))
         {
-            VMCB_CONTROL_AREA* c = VmcbControl(State->Vcpus[i]->Vmcb);
+            VMCB_CONTROL_AREA* c = VmcbControl(&State->Vcpus[i]->GuestVmcb);
             c->GuestAsid = i + 1;
         }
         KeRevertToUserGroupAffinityThread(&previous);
