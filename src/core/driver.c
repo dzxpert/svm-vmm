@@ -53,6 +53,17 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT D, PUNICODE_STRING R)
 {
     UNREFERENCED_PARAMETER(R);
 
+// BARE METAL DEBUG: Set to 0 to run full initialization
+#define BARE_METAL_DEBUG_EARLY_EXIT 0
+#if BARE_METAL_DEBUG_EARLY_EXIT
+    DbgPrint("SVM-HV: BARE METAL DEBUG - DriverEntry reached\n");
+    if (D) D->DriverUnload = DriverUnload;
+    DbgPrint("SVM-HV: BARE METAL DEBUG - Returning SUCCESS early\n");
+    return STATUS_SUCCESS;
+#endif
+
+    DbgPrint("SVM-HV: [CHECKPOINT 1] DriverEntry started\n");
+
     if (D)
     {
         D->DriverUnload = DriverUnload;
@@ -63,9 +74,12 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT D, PUNICODE_STRING R)
     }
 
     // Initialize NPT global state (spinlock + table map) before multi-core init
+    DbgPrint("SVM-HV: [CHECKPOINT 2] Calling NptGlobalInit\n");
     NptGlobalInit();
+    DbgPrint("SVM-HV: [CHECKPOINT 3] NptGlobalInit complete, calling SmpInitialize\n");
 
 	NTSTATUS st = SmpInitialize(&g_Smp, SMP_INIT_MAX_VCPUS);
+    DbgPrint("SVM-HV: [CHECKPOINT 4] SmpInitialize returned 0x%X\n", st);
     if (!NT_SUCCESS(st))
     {
         DbgPrint("SVM-HV: SmpInitialize failed: 0x%X\n", st);

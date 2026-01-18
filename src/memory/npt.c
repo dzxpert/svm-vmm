@@ -122,7 +122,7 @@ static NPT_ENTRY* NptAllocTable(PHYSICAL_ADDRESS* outPa)
     
     NptRegisterTable(outPa->QuadPart, tbl);
     
-    DbgPrint("SVM-HV: NPT table allocated - VA=%p PA=0x%llX\n", tbl, outPa->QuadPart);
+    // DbgPrint("SVM-HV: NPT table allocated - VA=%p PA=0x%llX\n", tbl, outPa->QuadPart);  // Commented to reduce noise
     return tbl;
 }
 
@@ -592,172 +592,90 @@ NTSTATUS NptInitialize(NPT_STATE* State)
         State->FakePagePa[i] = MmGetPhysicalAddress(State->FakePageVa[i]);
     }
 
-    // Allocate PML4
-    PHYSICAL_ADDRESS pml4Pa;
-    NPT_ENTRY* pml4 = NptAllocTable(&pml4Pa);
+    // ==========================================================================
+    // SIMPLE 1GB PAGE IDENTITY MAPPING (like reference project)
+    // This covers the ENTIRE 512GB address space using 1GB huge pages
+    // No need for complex per-range mapping - just identity map everything
+    // ==========================================================================
+    
+    DbgPrint("SVM-HV: Using 1GB huge page NPT for full identity mapping\n");
+    
+    // Allocate PML4 (512 entries)
+    PHYSICAL_ADDRESS low = { 0 };
+    PHYSICAL_ADDRESS high = { .QuadPart = ~0ULL };
+    PHYSICAL_ADDRESS skip = { 0 };
+    
+    NPT_ENTRY* pml4 = MmAllocateContiguousMemorySpecifyCache(
+        sizeof(NPT_ENTRY) * 512, low, high, skip, MmCached);
     if (!pml4)
     {
-        DbgPrint("SVM-HV: NPT PML4 alloc failed\n");
+        DbgPrint("SVM-HV: Failed to allocate PML4\n");
         return HV_STATUS_NPT_PML4;
     }
-
+    RtlZeroMemory(pml4, sizeof(NPT_ENTRY) * 512);
+    
     State->Pml4 = pml4;
-    State->Pml4Pa = pml4Pa;
-
-    // ========== FIX #1: Map only valid RAM ranges from Windows ==========
-    PPHYSICAL_MEMORY_RANGE ranges = MmGetPhysicalMemoryRanges();
-    if (!ranges)
-    {
-        DbgPrint("SVM-HV: MmGetPhysicalMemoryRanges failed\n");
-        return HV_STATUS_NPT_RANGES;
-    }
-
-    DbgPrint("SVM-HV: Physical Memory Ranges:\n");
-
-    // Map ONLY valid RAM ranges
-    for (PPHYSICAL_MEMORY_RANGE r = ranges; 
-         r->BaseAddress.QuadPart || r->NumberOfBytes.QuadPart; 
-         r++)
-    {
-        UINT64 rangeStart = r->BaseAddress.QuadPart;
-        UINT64 rangeEnd = rangeStart + r->NumberOfBytes.QuadPart;
-        
-        DbgPrint("  Range: 0x%016llX - 0x%016llX (%llu MB)\n", 
-                 rangeStart, rangeEnd, 
-                 r->NumberOfBytes.QuadPart / (1024*1024));
-
-        // Align to 2MB boundaries (NPT uses 2MB large pages)
-        // Round DOWN start to include any 2MB page containing RAM
-        // Round UP end to include all RAM
-        UINT64 pageStart = rangeStart & ~0x1FFFFFULL;  // Round down
-        UINT64 pageEnd = (rangeEnd + 0x1FFFFFULL) & ~0x1FFFFFULL;  // Round up
-        
-        DbgPrint("  Mapping 2MB pages: 0x%llX - 0x%llX\n", pageStart, pageEnd);
-        
-        // Map each 2MB page in this range
-        for (UINT64 phys = pageStart; phys < pageEnd; phys += 0x200000ULL)
-        {
-            UINT64 pml4_i = (phys >> 39) & 0x1FF;
-            UINT64 pdpt_i = (phys >> 30) & 0x1FF;
-            UINT64 pd_i = (phys >> 21) & 0x1FF;
-
-            NPT_ENTRY* pdpt = NptEnsureSubtable(pml4, pml4_i);
-            if (!pdpt)
-            {
-                DbgPrint("SVM-HV: NPT PDPT alloc failed (pml4=%llu)\n", pml4_i);
-                ExFreePool(ranges);
-                return HV_STATUS_NPT_PDPT;
-            }
-
-            NPT_ENTRY* pd = NptEnsureSubtable(pdpt, pdpt_i);
-            if (!pd)
-            {
-                DbgPrint("SVM-HV: NPT PD alloc failed (pml4=%llu pdpt=%llu)\n", 
-                         pml4_i, pdpt_i);
-                ExFreePool(ranges);
-                return HV_STATUS_NPT_PD;
-            }
-
-            NPT_ENTRY* pde = &pd[pd_i];
-            if (!pde->Present)
-            {
-                pde->Present = 1;
-                pde->Write = 1;
-                pde->User = 1;      // Required for NPT
-                pde->LargePage = 1; // 2MB page
-                pde->PageFrame = phys >> 12;
-            }
-        }
-    }
-
-    ExFreePool(ranges);
-
-    // ========== Map critical MMIO regions ==========
-    DbgPrint("SVM-HV: Mapping MMIO regions...\n");
+    State->Pml4Pa = MmGetPhysicalAddress(pml4);
+    NptRegisterTable(State->Pml4Pa.QuadPart, pml4);
     
-    // Map first 2MB for legacy regions (real mode IVT, BDA, etc.)
-    // This is needed for some BIOS/UEFI interactions
+    // Allocate PDPT entries array (512 PML4 entries x 512 PDPT entries = 262144 entries)
+    // Each PDPT entry with LargePage=1 covers 1GB
+    // Total coverage = 512 * 512 * 1GB = 256TB (full x64 address space)
+    SIZE_T pdptSize = sizeof(NPT_ENTRY) * 512 * 512;
+    NPT_ENTRY* allPdpt = MmAllocateContiguousMemorySpecifyCache(
+        pdptSize, low, high, skip, MmCached);
+    if (!allPdpt)
     {
-        UINT64 phys = 0;
-        UINT64 pml4_i = (phys >> 39) & 0x1FF;
-        UINT64 pdpt_i = (phys >> 30) & 0x1FF;
-        UINT64 pd_i = (phys >> 21) & 0x1FF;
-
-        NPT_ENTRY* pdpt = NptEnsureSubtable(pml4, pml4_i);
-        if (pdpt)
+        DbgPrint("SVM-HV: Failed to allocate PDPT array (%llu bytes)\n", (UINT64)pdptSize);
+        MmFreeContiguousMemory(pml4);
+        return HV_STATUS_NPT_PDPT;
+    }
+    RtlZeroMemory(allPdpt, pdptSize);
+    
+    State->PdptEntries = allPdpt;
+    State->PdptEntriesPa = MmGetPhysicalAddress(allPdpt);
+    
+    DbgPrint("SVM-HV: Allocated PML4 at %p (PA=0x%llX)\n", pml4, State->Pml4Pa.QuadPart);
+    DbgPrint("SVM-HV: Allocated PDPT array at %p (PA=0x%llX, size=0x%llX)\n", 
+             allPdpt, State->PdptEntriesPa.QuadPart, (UINT64)pdptSize);
+    
+    // Setup all 512 PML4 entries, each pointing to a block of 512 PDPT entries
+    for (ULONG64 pml4Index = 0; pml4Index < 512; pml4Index++)
+    {
+        // Each PML4 entry points to a contiguous set of 512 PDPT entries
+        NPT_ENTRY* thisPdpt = &allPdpt[pml4Index * 512];
+        PHYSICAL_ADDRESS pdptPa = MmGetPhysicalAddress(thisPdpt);
+        
+        pml4[pml4Index].Present = 1;
+        pml4[pml4Index].Write = 1;
+        pml4[pml4Index].User = 1;  // Supervisor bit for NPT
+        pml4[pml4Index].PageFrame = pdptPa.QuadPart >> 12;
+        
+        // NOTE: We intentionally do NOT call NptRegisterTable for each PDPT block
+        // since we have a contiguous allocation. The table map has limited size
+        // and would overflow with 512 entries per CPU * N CPUs.
+        
+        
+        // Setup all 512 PDPT entries as 1GB huge pages (identity mapped)
+        for (ULONG64 pdpIndex = 0; pdpIndex < 512; pdpIndex++)
         {
-            NPT_ENTRY* pd = NptEnsureSubtable(pdpt, pdpt_i);
-            if (pd)
-            {
-                NPT_ENTRY* pde = &pd[pd_i];
-                if (!pde->Present)
-                {
-                    pde->Present = 1;
-                    pde->Write = 1;
-                    pde->User = 1;
-                    pde->LargePage = 1;
-                    pde->PageFrame = phys >> 12;
-                    DbgPrint("SVM-HV: Mapped legacy region 0x%llX\n", phys);
-                }
-            }
+            // Physical address this 1GB page maps to:
+            // Page index = pml4Index * 512 + pdpIndex
+            // Physical address = pageIndex * 1GB = pageIndex * 0x40000000
+            // PageFrame field = physAddr >> 12 = pageIndex << 18
+            UINT64 pageIndex = pml4Index * 512ULL + pdpIndex;
+            
+            thisPdpt[pdpIndex].Present = 1;
+            thisPdpt[pdpIndex].Write = 1;
+            thisPdpt[pdpIndex].User = 1;       // Supervisor for NPT
+            thisPdpt[pdpIndex].LargePage = 1;  // 1GB huge page!
+            thisPdpt[pdpIndex].PageFrame = pageIndex << 18;  // Correct: physAddr >> 12
         }
     }
     
-    // Map APIC region (0xFEE00000) - typically 4KB but we use 2MB page containing it
-    {
-        UINT64 apicBase = 0xFEC00000ULL;  // 2MB-aligned base containing APIC
-        UINT64 pml4_i = (apicBase >> 39) & 0x1FF;
-        UINT64 pdpt_i = (apicBase >> 30) & 0x1FF;
-        UINT64 pd_i = (apicBase >> 21) & 0x1FF;
-
-        NPT_ENTRY* pdpt = NptEnsureSubtable(pml4, pml4_i);
-        if (pdpt)
-        {
-            NPT_ENTRY* pd = NptEnsureSubtable(pdpt, pdpt_i);
-            if (pd)
-            {
-                NPT_ENTRY* pde = &pd[pd_i];
-                if (!pde->Present)
-                {
-                    pde->Present = 1;
-                    pde->Write = 1;
-                    pde->User = 1;
-                    pde->LargePage = 1;
-                    pde->CacheDisable = 1;  // Critical for MMIO!
-                    pde->PageFrame = apicBase >> 12;
-                    DbgPrint("SVM-HV: Mapped APIC region 0x%llX\n", apicBase);
-                }
-            }
-        }
-    }
-    
-    // Map PCI MMIO range (0xE0000000 - 0xF0000000) as 2MB pages
-    for (UINT64 addr = 0xE0000000ULL; addr < 0xF0000000ULL; addr += 0x200000ULL)
-    {
-        UINT64 pml4_i = (addr >> 39) & 0x1FF;
-        UINT64 pdpt_i = (addr >> 30) & 0x1FF;
-        UINT64 pd_i = (addr >> 21) & 0x1FF;
-
-        NPT_ENTRY* pdpt = NptEnsureSubtable(pml4, pml4_i);
-        if (!pdpt) continue;
-
-        NPT_ENTRY* pd = NptEnsureSubtable(pdpt, pdpt_i);
-        if (!pd) continue;
-
-        NPT_ENTRY* pde = &pd[pd_i];
-        if (!pde->Present)
-        {
-            pde->Present = 1;
-            pde->Write = 1;
-            pde->User = 1;
-            pde->LargePage = 1;
-            pde->CacheDisable = 1;  // Important for MMIO!
-            pde->PageFrame = addr >> 12;
-        }
-    }
-    DbgPrint("SVM-HV: Mapped PCI MMIO region 0xE0000000-0xF0000000\n");
-
+    DbgPrint("SVM-HV: Identity mapped 256TB using 1GB pages (512 PML4 x 512 PDPT)\n");
     DbgPrint("SVM-HV: NPT initialization complete\n");
+    
     return STATUS_SUCCESS;
 }
 

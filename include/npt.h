@@ -64,6 +64,11 @@ typedef struct _NPT_STATE
     
     // Flag to track when TLB flush is needed after hook operations
     BOOLEAN TlbFlushPending;
+    
+    // 1GB page PDPT entries (for simple identity mapping)
+    // This provides full address space coverage without per-page allocation
+    NPT_ENTRY* PdptEntries;
+    PHYSICAL_ADDRESS PdptEntriesPa;
 } NPT_STATE;
 
 VOID NptGlobalInit(VOID);

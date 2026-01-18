@@ -12,6 +12,28 @@ MACHINE_FRAME_SIZE          equ     28h
 
 extern HandleVmExit : proc
 
+;------------------------------------------------------------------------------
+; UINT16 ReadTr(VOID)
+; Returns the Task Register selector
+;------------------------------------------------------------------------------
+PUBLIC ReadTr
+ReadTr PROC
+        xor     rax, rax
+        str     ax
+        ret
+ReadTr ENDP
+
+;------------------------------------------------------------------------------
+; UINT16 ReadLdtr(VOID)
+; Returns the LDTR selector  
+;------------------------------------------------------------------------------
+PUBLIC ReadLdtr
+ReadLdtr PROC
+        xor     rax, rax
+        sldt    ax
+        ret
+ReadLdtr ENDP
+
 PUSHAQ macro
         push    rax
         push    rcx

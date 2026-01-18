@@ -183,6 +183,10 @@ static VOID SetupVmcbFromContext(VCPU* V, PCONTEXT Ctx)
     // TSC offset - used to compensate for VMEXIT overhead
     c->TscOffset = V->CloakedTscOffset;
     
+    // Flush entire TLB on first VMRUN to prevent stale entries
+    // This is critical for bare metal where TLB may have garbage
+    c->TlbControl = 1;  // 1 = Flush all TLB on next VMRUN
+    
     // Setup state save area from captured context
     s->Gdtr.Base = gdtr.Base;
     s->Gdtr.Limit = gdtr.Limit;
@@ -203,6 +207,78 @@ static VOID SetupVmcbFromContext(VCPU* V, PCONTEXT Ctx)
     s->Ds.Attributes = GetSegmentAccessRights(Ctx->SegDs, gdtr.Base);
     s->Es.Attributes = GetSegmentAccessRights(Ctx->SegEs, gdtr.Base);
     s->Ss.Attributes = GetSegmentAccessRights(Ctx->SegSs, gdtr.Base);
+    
+    // ========== CRITICAL FIX: Add missing segments (FS, GS, TR, LDTR) ==========
+    // Missing GS segment = crash on bare metal because Windows kernel uses GS for KPCR
+    
+    // FS segment (TEB in user mode, rarely used in kernel mode for x64)
+    s->Fs.Selector = Ctx->SegFs;
+    s->Fs.Limit = (UINT32)__segmentlimit(Ctx->SegFs);
+    s->Fs.Attributes = GetSegmentAccessRights(Ctx->SegFs, gdtr.Base);
+    s->Fs.Base = __readmsr(MSR_FS_BASE);
+    
+    // GS segment (KPCR in kernel mode - CRITICAL for Windows kernel operation)
+    s->Gs.Selector = Ctx->SegGs;
+    s->Gs.Limit = (UINT32)__segmentlimit(Ctx->SegGs);
+    s->Gs.Attributes = GetSegmentAccessRights(Ctx->SegGs, gdtr.Base);
+    s->Gs.Base = __readmsr(MSR_GS_BASE);
+    
+    // TR (Task Register) - required for TSS, affects interrupt handling
+    {
+        // External assembly function (x64 doesn't support inline asm)
+        extern UINT16 ReadTr(VOID);
+        UINT16 trSelector = ReadTr();
+        
+        s->Tr.Selector = trSelector;
+        s->Tr.Limit = (UINT32)__segmentlimit(trSelector);
+        s->Tr.Attributes = GetSegmentAccessRights(trSelector, gdtr.Base);
+        
+        // Get TR base from GDT (TSS is a system descriptor, need full base)
+        typedef struct _SYSTEM_SEGMENT_DESCRIPTOR {
+            UINT16 LimitLow;
+            UINT16 BaseLow;
+            UINT8 BaseMiddle;
+            UINT8 Type : 4;
+            UINT8 System : 1;
+            UINT8 Dpl : 2;
+            UINT8 Present : 1;
+            UINT8 LimitHigh : 4;
+            UINT8 Avl : 1;
+            UINT8 Reserved1 : 2;
+            UINT8 Granularity : 1;
+            UINT8 BaseHigh;
+            UINT32 BaseUpper;
+            UINT32 Reserved2;
+        } SYSTEM_SEGMENT_DESCRIPTOR;
+        
+        SYSTEM_SEGMENT_DESCRIPTOR* tssDesc = (SYSTEM_SEGMENT_DESCRIPTOR*)(gdtr.Base + (trSelector & ~0x7));
+        s->Tr.Base = (UINT64)tssDesc->BaseLow | 
+                     ((UINT64)tssDesc->BaseMiddle << 16) | 
+                     ((UINT64)tssDesc->BaseHigh << 24) |
+                     ((UINT64)tssDesc->BaseUpper << 32);
+    }
+    
+    // LDTR (Local Descriptor Table Register) - usually 0 in modern Windows
+    {
+        // External assembly function (x64 doesn't support inline asm)
+        extern UINT16 ReadLdtr(VOID);
+        UINT16 ldtrSelector = ReadLdtr();
+        
+        s->Ldtr.Selector = ldtrSelector;
+        if (ldtrSelector != 0)
+        {
+            s->Ldtr.Limit = (UINT32)__segmentlimit(ldtrSelector);
+            s->Ldtr.Attributes = GetSegmentAccessRights(ldtrSelector, gdtr.Base);
+        }
+        else
+        {
+            // Null LDTR - common in x64 Windows
+            s->Ldtr.Limit = 0;
+            s->Ldtr.Attributes = 0;
+            s->Ldtr.Base = 0;
+        }
+    }
+    // ========== END OF SEGMENT FIX ==========
     
     s->Efer = MsrRead(MSR_EFER);
     s->Cr0 = __readcr0();
