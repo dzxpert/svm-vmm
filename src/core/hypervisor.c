@@ -290,9 +290,8 @@ EXTERN_C BOOLEAN HandleVmExit(VCPU* V, PGUEST_REGISTERS GuestRegs)
     V->Exec.ExitCount++;
     V->Exec.LastExitCode = exitCode;
 
-    // Load host state
-    PHYSICAL_ADDRESS hostVmcbPa = MmGetPhysicalAddress(&V->HostVmcb);
-    __svm_vmload(hostVmcbPa.QuadPart);
+    // Load host state (use cached PA - performance optimization)
+    __svm_vmload(V->HostVmcbPaCached.QuadPart);
 
     // Copy RAX from VMCB to guest registers (RAX is saved in VMCB, not stack)
     GuestRegs->Rax = s->Rax;
@@ -336,6 +335,21 @@ EXTERN_C BOOLEAN HandleVmExit(VCPU* V, PGUEST_REGISTERS GuestRegs)
         // Virtual interrupt pending - clear V_IRQ to acknowledge
         // The interrupt will be delivered to guest on next VMRUN
         c->InterruptControl &= ~(1UL << 8);  // Clear V_IRQ bit
+        break;
+
+    case SVM_EXIT_XSETBV:
+        // Handle XSETBV - required for AVX support
+        // ECX = XCR number (should be 0), EDX:EAX = new value
+        _xsetbv((UINT32)GuestRegs->Rcx, 
+                (GuestRegs->Rdx << 32) | (GuestRegs->Rax & 0xFFFFFFFF));
+        HvAdvanceRIP(V, 3);
+        break;
+
+    case SVM_EXIT_SMI:
+        // SMI (System Management Interrupt) - acknowledge without advancing RIP
+        // SMI has no associated instruction, just clear pending state
+        c->InterruptControl &= ~(1UL << 24);  // Clear SMI pending
+        // Do NOT advance RIP - SMI is not an instruction
         break;
 
     default:

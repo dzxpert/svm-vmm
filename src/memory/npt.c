@@ -687,37 +687,26 @@ VOID NptDestroy(NPT_STATE* State)
     if (!State)
         return;
 
+    // Free fake pages
     for (ULONG i = 0; i < 2; i++)
     {
         if (State->FakePageVa[i])
             MmFreeContiguousMemory(State->FakePageVa[i]);
     }
 
+    // Free contiguous PDPT allocation (allocated as single block in NptInitialize)
+    // This is the FIX for ~1MB memory leak per VCPU
+    if (State->PdptEntries)
+    {
+        MmFreeContiguousMemory(State->PdptEntries);
+        State->PdptEntries = NULL;
+    }
+
+    // Free PML4
     if (State->Pml4)
     {
-        for (UINT64 pml4_i = 0; pml4_i < 512; pml4_i++)
-        {
-            if (!State->Pml4[pml4_i].Present)
-                continue;
-
-            NPT_ENTRY* pdpt = NptResolveTableFromEntry(&State->Pml4[pml4_i]);
-            if (!pdpt || !MmIsAddressValid(pdpt))
-                continue;
-
-            for (UINT64 pdpt_i = 0; pdpt_i < 512; pdpt_i++)
-            {
-                if (!pdpt[pdpt_i].Present || pdpt[pdpt_i].LargePage)
-                    continue;
-
-                NPT_ENTRY* pd = NptResolveTableFromEntry(&pdpt[pdpt_i]);
-                if (pd && MmIsAddressValid(pd))
-                    MmFreeContiguousMemory(pd);
-            }
-
-            MmFreeContiguousMemory(pdpt);
-        }
-
         MmFreeContiguousMemory(State->Pml4);
+        State->Pml4 = NULL;
     }
 }
 

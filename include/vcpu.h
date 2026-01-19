@@ -95,6 +95,11 @@ typedef struct _VCPU
     PHYSICAL_ADDRESS IopmPa;
 
     //
+    // Cached physical addresses (avoid MmGetPhysicalAddress in hot paths)
+    //
+    PHYSICAL_ADDRESS HostVmcbPaCached;
+
+    //
     // Runtime statistics
     //
     struct

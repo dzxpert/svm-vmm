@@ -159,8 +159,9 @@ static VOID SetupVmcbFromContext(VCPU* V, PCONTEXT Ctx)
     c->VmcbClean = 0;
     
     // Intercepts - use Intercepts array
-    // Word 3: CPUID (bit 18), optionally RDTSC (bit 1) for timing attack mitigation
+    // Word 3: CPUID (bit 18), SMI (bit 26) for bare metal stability
     c->Intercepts[3] = SVM_INTERCEPT_CPUID;
+    c->Intercepts[3] |= (1 << 26);  // SMI intercept - prevents crash when anti-cheat triggers SMI
     
     // Word 4: VMRUN (bit 0), VMMCALL (bit 1), optionally RDTSCP (bit 3)
     c->Intercepts[4] = SVM_INTERCEPT_VMRUN | SVM_INTERCEPT_VMMCALL;
@@ -384,6 +385,9 @@ NTSTATUS SvmLaunch(VCPU* V)
     PHYSICAL_ADDRESS guestVmcbPa = MmGetPhysicalAddress(&V->GuestVmcb);
     PHYSICAL_ADDRESS hostVmcbPa = MmGetPhysicalAddress(&V->HostVmcb);
     PHYSICAL_ADDRESS hostStateAreaPa = MmGetPhysicalAddress(&V->HostStateArea);
+    
+    // Cache for hot path (HandleVmExit uses this instead of MmGetPhysicalAddress)
+    V->HostVmcbPaCached = hostVmcbPa;
     
     // Setup host stack layout (at top of host stack)
     V->HostStackLayout.GuestVmcbPa = guestVmcbPa.QuadPart;

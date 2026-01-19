@@ -10,6 +10,8 @@
 #define SVM_EXIT_MSR          0x7C
 #define SVM_EXIT_VMMCALL      0x81
 #define SVM_EXIT_RDTSCP       0x87
+#define SVM_EXIT_XSETBV       0x8D    // XSETBV instruction - required for AVX support
+#define SVM_EXIT_SMI          0x6B    // System Management Interrupt
 #define SVM_EXIT_NPF          0x400
 
 // Intercept word indices
