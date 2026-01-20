@@ -2,12 +2,27 @@
 
 #include <stdint.h>
 
+// Encrypted VMMCALL interface (matches kernel-side)
+#define VMCALL_KEY 0x1337DEADBEEFCAFEULL
+#define VMCALL_SIG 0xBEEF
+
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 
 uint64_t hv_vmcall(uint64_t code, uint64_t arg1, uint64_t arg2, uint64_t arg3);
+
+// Encrypted wrapper - use this for all hypercalls
+static inline uint64_t hv_vmcall_encrypted(uint64_t code, uint64_t arg1, uint64_t arg2, uint64_t arg3) {
+    // Encrypt code with XOR key
+    uint64_t encrypted_code = code ^ VMCALL_KEY;
+    
+    // Add signature to low word of arg3
+    uint64_t signed_arg3 = (arg3 & 0xFFFFFFFFFFFF0000ULL) | VMCALL_SIG;
+    
+    return hv_vmcall(encrypted_code, arg1, arg2, signed_arg3);
+}
 
 
 typedef enum _hv_vmcall_code {

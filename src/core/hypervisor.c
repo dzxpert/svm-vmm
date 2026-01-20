@@ -120,8 +120,12 @@ static VOID HvHandleNpf(VCPU* V)
     UINT64 fault_gpa = c->ExitInfo2;  // Faulting guest physical address
     UINT64 error_code = c->ExitInfo1; // NPF error code
     
-    DbgPrint("SVM-HV: NPF at GPA=0x%llX ErrorCode=0x%llX RIP=0x%llX\n",
-             fault_gpa, error_code, VmcbState(&V->GuestVmcb)->Rip);
+    // Log to telemetry ring buffer instead of DbgPrint (stealth)
+    ULONG idx = V->Telemetry.NpfIndex++ % 256;
+    V->Telemetry.Npf[idx].Gpa = fault_gpa;
+    V->Telemetry.Npf[idx].ErrorCode = error_code;
+    V->Telemetry.Npf[idx].Rip = VmcbState(&V->GuestVmcb)->Rip;
+    V->Telemetry.Npf[idx].Timestamp = __rdtsc();
 
     // Try layered NPF handler first
     if (HvHandleLayeredNpf(V, fault_gpa))
@@ -132,7 +136,6 @@ static VOID HvHandleNpf(VCPU* V)
     // Try hook system
     if (HookNptHandleFault(V, fault_gpa))
     {
-        DbgPrint("SVM-HV: NPF handled by hook system\n");
         return;
     }
 
@@ -144,7 +147,7 @@ static VOID HvHandleNpf(VCPU* V)
     // Check if this looks like an MMIO region (high physical addresses)
     if (page >= 0xE0000000ULL && page < 0x100000000ULL)
     {
-        DbgPrint("SVM-HV: Creating NPT mapping for MMIO region 0x%llX\n", page);
+        // Silently split and mark uncached (no logging for stealth)
         
         // Create NPT entry for this MMIO page
         UINT64 pml4_i = (page >> 39) & 0x1FF;
@@ -155,14 +158,12 @@ static VOID HvHandleNpf(VCPU* V)
         NPT_ENTRY* pml4 = V->Npt.Pml4;
         if (!pml4)
         {
-            DbgPrint("SVM-HV: NPT PML4 not initialized!\n");
             goto inject_fault;
         }
 
         // Check/create PDPT entry
         if (!pml4[pml4_i].Present)
         {
-            DbgPrint("SVM-HV: PML4[%llu] not present, cannot create MMIO mapping\n", pml4_i);
             goto inject_fault;
         }
 
@@ -191,7 +192,6 @@ static VOID HvHandleNpf(VCPU* V)
                     // Mark TLB flush needed
                     V->Npt.TlbFlushPending = TRUE;
                     
-                    DbgPrint("SVM-HV: MMIO mapping created successfully for 0x%llX\n", page);
                     return;
                 }
             }
@@ -200,7 +200,6 @@ static VOID HvHandleNpf(VCPU* V)
 
 inject_fault:
     // If we couldn't handle it, inject #PF to guest
-    DbgPrint("SVM-HV: Unhandled NPF - injecting #PF to guest\n");
     
     // Inject #PF (Page Fault) exception to guest
     // Format: [31]=Valid, [11]=ErrorCodeValid, [10:8]=Type (3=Exception), [7:0]=Vector (14=#PF)
@@ -290,6 +289,11 @@ EXTERN_C BOOLEAN HandleVmExit(VCPU* V, PGUEST_REGISTERS GuestRegs)
     V->Exec.ExitCount++;
     V->Exec.LastExitCode = exitCode;
 
+    // Track exit counts in telemetry (for performance analysis)
+    if (exitCode < 64) {
+        V->Telemetry.ExitCounts[exitCode]++;
+    }
+
     // Load host state (use cached PA - performance optimization)
     __svm_vmload(V->HostVmcbPaCached.QuadPart);
 
@@ -353,10 +357,8 @@ EXTERN_C BOOLEAN HandleVmExit(VCPU* V, PGUEST_REGISTERS GuestRegs)
         break;
 
     default:
-        // Unknown exit - log and inject #UD exception to guest
-        // This is safer than blindly advancing RIP by 1 byte
-        DbgPrint("SVM-HV: [CPU %llu] Unhandled VMEXIT 0x%llX at RIP 0x%llX\n",
-                 V->HostStackLayout.ProcessorIndex, exitCode, s->Rip);
+        // Unknown exit - log to telemetry and inject #UD exception to guest
+        V->Telemetry.LastUnhandledExit = exitCode;
         
         // Inject #UD (Invalid Opcode) exception
         // EventInjection format: [31]=Valid, [10:8]=Type (3=Exception), [7:0]=Vector (6=#UD)

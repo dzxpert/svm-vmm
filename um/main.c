@@ -8,7 +8,7 @@
 
 static uint64_t safe_vmcall(uint64_t code, uint64_t arg1, uint64_t arg2, uint64_t arg3) {
     __try {
-        return hv_vmcall(code, arg1, arg2, arg3);
+        return hv_vmcall_encrypted(code, arg1, arg2, arg3);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         printf("[!] vmmcall 0x%llx faulted with 0x%08X\n", code, GetExceptionCode());
         return 0;

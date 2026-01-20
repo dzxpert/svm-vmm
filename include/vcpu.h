@@ -110,6 +110,24 @@ typedef struct _VCPU
     } Exec;
 
     //
+    // Telemetry ring buffer (replaces DbgPrint for stealth)
+    // Query via VMMCALL 0x400 from usermode
+    //
+    struct
+    {
+        struct {
+            UINT64 Gpa;
+            UINT64 ErrorCode;
+            UINT64 Rip;
+            UINT64 Timestamp;
+        } Npf[256];  // NPF events
+        ULONG NpfIndex;
+        
+        UINT64 ExitCounts[64];  // Per exit-code counters
+        UINT64 LastUnhandledExit;
+    } Telemetry;
+
+    //
     // IPC / Mailbox subsystem (optional)
     //
     struct

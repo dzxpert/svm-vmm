@@ -3,6 +3,7 @@
 #include "vcpu.h"
 #include "smp.h"
 #include "npt.h"
+#include "hv_debug.h"
 
 
 

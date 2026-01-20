@@ -11,6 +11,10 @@
 #include "communication.h"
 #include "sync.h"
 
+// Encrypted VMMCALL interface
+#define VMCALL_KEY 0x1337DEADBEEFCAFEULL
+#define VMCALL_SIG 0xBEEF
+
 // Spinlock for protecting global syscall hook state
 static HV_SPINLOCK g_SyscallLock = HV_SPINLOCK_INIT;
 
@@ -203,6 +207,17 @@ BOOLEAN HookNptHandleFault(VCPU* V, UINT64 faultingGpa)
 
 UINT64 HookVmmcallDispatch(VCPU* V, UINT64 code, UINT64 a1, UINT64 a2, UINT64 a3)
 {
+    // Decrypt command code
+    code ^= VMCALL_KEY;
+    
+    // Verify signature to prevent accidental VMCALLs
+    if ((a3 & 0xFFFF) != VMCALL_SIG) {
+        // Not our VMMCALL, inject #UD to guest
+        VMCB_CONTROL_AREA* c = VmcbControl(&V->GuestVmcb);
+        c->EventInjection = (1UL << 31) | (3UL << 8) | 6;
+        return 0;
+    }
+    
     switch (code)
     {
     case 0x100:   // read guest virtual mem
@@ -314,6 +329,29 @@ UINT64 HookVmmcallDispatch(VCPU* V, UINT64 code, UINT64 a1, UINT64 a2, UINT64 a3
 
     case 0x301:
         HookRemoveSyscall();
+        return TRUE;
+
+    case 0x400: // Query telemetry - NPF count
+        return V->Telemetry.NpfIndex;
+
+    case 0x401: // Query telemetry - NPF entry by index (a1 = index)
+        if (a1 < 256) {
+            UINT64 idx = a1 % 256;
+            return V->Telemetry.Npf[idx].Gpa;
+        }
+        return 0;
+
+    case 0x402: // Query telemetry - exit count by code (a1 = exit code)
+        if (a1 < 64) {
+            return V->Telemetry.ExitCounts[a1];
+        }
+        return 0;
+
+    case 0x403: // Query telemetry - last unhandled exit
+        return V->Telemetry.LastUnhandledExit;
+
+    case 0x404: // Clear telemetry
+        RtlZeroMemory(&V->Telemetry, sizeof(V->Telemetry));
         return TRUE;
 
     default:
