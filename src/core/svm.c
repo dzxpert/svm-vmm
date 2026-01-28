@@ -1,4 +1,13 @@
-﻿#include <ntifs.h>
+﻿// Target Windows 10+ (place at the VERY TOP, before all includes)
+#ifndef _WIN32_WINNT
+#define _WIN32_WINNT 0x0A00  // Windows 10
+#endif
+
+#ifndef _AMD64_
+#define _AMD64_
+#endif
+
+#include <ntifs.h>
 #include <intrin.h>
 #include "svm.h"
 #include "msr.h"
