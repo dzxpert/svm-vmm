@@ -80,14 +80,28 @@ VOID ShadowIdtCommonHandler(VCPU* V, UINT64 vector, UINT64 errorCode)
 {
     ShadowHandleException(V, (UINT32)vector, errorCode);
 
- 
     VMCB_CONTROL_AREA* c = VmcbControl(&V->GuestVmcb);
     VMCB_STATE_SAVE_AREA* s = VmcbState(&V->GuestVmcb);
 
     if (c->NextRip)
+    {
         s->Rip = c->NextRip;
-    else
-        s->Rip += 2;
+        return;
+    }
+
+    switch ((UINT32)vector)
+    {
+    case 1: // #DB - do not advance RIP
+        break;
+
+    case 3: // #BP (int3) - 1-byte instruction
+        s->Rip += 1;
+        break;
+
+    default:
+        s->Rip += 2; // preserve existing behavior for now
+        break;
+    }
 }
 
 
